@@ -15,6 +15,12 @@
 #include <libultraship/bridge/gfxdebuggerbridge.h>
 #include <libultraship/bridge/windowbridge.h>
 #include <ship/Context.h>
+#ifdef __IOS__
+#include <ship/utils/AppleFolderManager.h> // FolderManager::getMainBundlePath, the REAL .app path
+#include "soh/Notification/Notification.h"
+#include <ctime>
+extern "C" int64_t IOSGetSignatureExpiryUnix(void); // engine IOSCertInfo.mm
+#endif
 #include <ship/resource/File.h>
 #include <ship/window/Window.h>
 #include <soh/GameVersions.h>
@@ -293,7 +299,12 @@ static void IOS_PrepareAppDirectory() {
     std::filesystem::create_directories(dataPath, ec);
     chdir(dataPath.c_str());
 
-    const std::string bundlePath = Ship::Context::GetAppBundlePath();
+    // The REAL .app bundle, not Context::GetAppBundlePath() — on iOS that helper returns the
+    // Documents directory (deliberately, so the engine reads/writes there), which made this
+    // copy Documents-onto-Documents: a silent no-op. The bundled soh.o2r never actually left
+    // the app, and updates could never refresh it.
+    Ship::FolderManager folderManager;
+    const std::string bundlePath = folderManager.getMainBundlePath();
     const std::string bundleO2r = bundlePath + "/soh.o2r";
     const std::string dataO2r = dataPath + "/soh.o2r";
     std::error_code sizeEc;
@@ -302,9 +313,13 @@ static void IOS_PrepareAppDirectory() {
          std::filesystem::file_size(dataO2r, sizeEc) != std::filesystem::file_size(bundleO2r, sizeEc))) {
         std::filesystem::copy_file(bundleO2r, dataO2r, std::filesystem::copy_options::overwrite_existing, ec);
     }
+    // Same size-mismatch refresh for the controller database, so app updates propagate it.
     const std::string bundleDb = bundlePath + "/gamecontrollerdb.txt";
-    if (std::filesystem::exists(bundleDb) && !std::filesystem::exists(dataPath + "/gamecontrollerdb.txt")) {
-        std::filesystem::copy_file(bundleDb, dataPath + "/gamecontrollerdb.txt", ec);
+    const std::string dataDb = dataPath + "/gamecontrollerdb.txt";
+    if (std::filesystem::exists(bundleDb) &&
+        (!std::filesystem::exists(dataDb) ||
+         std::filesystem::file_size(dataDb, sizeEc) != std::filesystem::file_size(bundleDb, sizeEc))) {
+        std::filesystem::copy_file(bundleDb, dataDb, std::filesystem::copy_options::overwrite_existing, ec);
     }
 }
 #endif
@@ -323,6 +338,26 @@ OTRGlobals::OTRGlobals() {
 
     context->InitConfiguration();
     context->InitConsoleVariables();
+
+#ifdef __IOS__
+    // One-time mobile defaults: phone sessions end abruptly, so autosave earns its keep.
+    // Seeded once so the player can still turn it off permanently.
+    if (!CVarGetInteger("gPort.MobileDefaultsApplied", 0)) {
+        CVarSetInteger(CVAR_ENHANCEMENT("Autosave"), 1);
+        // 60fps interpolation out of the box — the upstream default of 20 reads as broken on a
+        // ProMotion phone, and every supported device runs 60 comfortably.
+        CVarSetInteger(CVAR_SETTING("InterpolationFPS"), 60);
+        CVarSetInteger("gPort.MobileDefaultsApplied", 1);
+        CVarSave();
+    }
+
+    // Apple's Metal Performance HUD attaches to developer-signed apps whenever the
+    // system Graphics HUD setting is on; suppress it for this app unless explicitly
+    // re-enabled (gPort.ShowMetalHUD). Must be set before the Metal layer is created.
+    if (!CVarGetInteger("gPort.ShowMetalHUD", 0)) {
+        setenv("MTL_HUD_ENABLED", "0", 1);
+    }
+#endif
 
     auto controlDeck = std::make_shared<LUS::ControlDeck>(std::vector<CONTROLLERBUTTONS_T>({
         BTN_CUSTOM_MODIFIER1,
@@ -477,6 +512,20 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
     OSFatal();
 #endif
 
+#ifdef __IOS__
+    // No desktop extractor assets exist on the device, and there is no extractor to redirect
+    // to — so neither the fatal assets check nor the o2r deletion may run here. Deleting an
+    // outdated oot.o2r would destroy the player's hand-copied file with no way to regenerate
+    // it on the phone; tell them what to do on their PC instead and leave the file alone.
+    if (shouldRegen) {
+        SohGui::RegisterPopup("Game data is outdated",
+                              "Your oot.o2r was made with an incompatible version of Ship of Harkinian.\n\n"
+                              "On your PC: run the matching SoH release to regenerate oot.o2r, then replace the "
+                              "copy in this app's folder (Files app > On My iPhone > SoH, or the Apple Devices "
+                              "app on Windows).\n\nYour current file has NOT been deleted.",
+                              "OK", "", [&]() { exit(0); });
+    }
+#else
     if (!std::filesystem::exists(installPath + "/assets")) {
         SohGui::RegisterPopup("Extractor assets not found",
                               "No O2R files found. Missing 'assets/' folder needed to generate OTR file.\nPlease "
@@ -489,6 +538,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
         std::filesystem::remove("oot.o2r");
         std::filesystem::remove("oot-mq.o2r");
     }
+#endif
 
     std::shared_ptr<BS::thread_pool> threadPool = std::make_shared<BS::thread_pool>(1);
     std::optional<std::future<void>> extractionTask;
@@ -765,15 +815,16 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
         }
         // Process window events for resize, mouse, keyboard events
         wnd->HandleEvents();
+        // Skip dropped frames BEFORE pushing style colors: the pops only run on rendered
+        // frames, so a continue after the pushes leaks two stack entries per dropped frame
+        // until ImGui asserts. iOS drops frames routinely under the frame pacer.
+        if (!wnd->IsFrameReady()) {
+            continue;
+        }
         UIWidgets::Colors themeColor =
             static_cast<UIWidgets::Colors>(CVarGetInteger(CVAR_SETTING("Menu.Theme"), UIWidgets::Colors::LightBlue));
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, UIWidgets::ColorValues.at(themeColor));
         ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, UIWidgets::ColorValues.at(UIWidgets::Colors::DarkGray));
-
-        // Skip dropped frames
-        if (!wnd->IsFrameReady()) {
-            continue;
-        }
         gui->StartDraw();
         sohFast3dWindow->StartFrame();
         sohFast3dWindow->RunGuiOnly();
@@ -1626,6 +1677,21 @@ extern "C" void InitOTR(int argc, char* argv[]) {
 
     SohGui::SetupGuiElements();
     SohGui::SetupMenuElements();
+#ifdef __IOS__
+    // Surface an on-screen warning while there is still time to act: a free-Apple-ID
+    // signature that lapses turns into "the app won't open" with no explanation.
+    {
+        const int64_t expiry = IOSGetSignatureExpiryUnix();
+        if (expiry > 0) {
+            const int64_t hoursLeft = (expiry - (int64_t)time(nullptr)) / 3600;
+            if (hoursLeft >= 0 && hoursLeft < 48) {
+                Notification::Emit(
+                    { .message = "App signature expires in under 2 days - re-install from Sideloadly. Saves are kept.",
+                      .remainingTime = 15.0f });
+            }
+        }
+    }
+#endif
 
     AudioCollection::Instance = new AudioCollection();
     ActorDB::Instance = new ActorDB();

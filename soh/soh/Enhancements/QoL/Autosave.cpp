@@ -2,6 +2,9 @@
 #include "soh/Notification/Notification.h"
 #include "soh/ShipInit.hpp"
 #include "soh/SaveManager.h"
+#if defined(__IOS__) || defined(__ANDROID__)
+#include <ship/port/mobile/MobileImpl.h> // ConsumeBackgroundSaveRequest
+#endif
 
 extern "C" {
 extern PlayState* gPlayState;
@@ -52,6 +55,15 @@ static void Autosave_PerformSave() {
 static void Autosave_IntervalSave() {
     // Check if the interval has passed in minutes.
     uint64_t currentTimestamp = GetUnixTimestamp();
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Backgrounding is a save trigger of its own: the OS may jetsam the app at any moment
+    // after the switch-away, so "user left" must mean "progress is on disk" regardless of how
+    // recently the timer fired. This runs on the game thread — the lifecycle callback only
+    // sets a flag — and the CanSave/pause gates below still apply.
+    if (Ship::Mobile::ConsumeBackgroundSaveRequest()) {
+        lastSaveTimestamp = 0;
+    }
+#endif
     if ((currentTimestamp - lastSaveTimestamp) < THREE_MINUTES_IN_UNIX) {
         return;
     }

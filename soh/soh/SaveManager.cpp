@@ -1,5 +1,6 @@
 #include "SaveManager.h"
 #include "OTRGlobals.h"
+#include "soh/Notification/Notification.h"
 #include "Enhancements/game-interactor/GameInteractor.h"
 #include "Enhancements/randomizer/SeedContext.h"
 #include "Enhancements/randomizer/entrance.h"
@@ -1197,7 +1198,20 @@ void SaveManager::SaveFileThreaded(int fileNum, SaveContext* saveContext, int se
 #else
     std::ofstream output(tempFile);
     output << std::setw(1) << saveBlock << std::endl;
+    // A failed write (device full, jetsam mid-flush) leaves a truncated temp file; the rename
+    // below would then atomically install CORRUPT data over a good save. Abort instead — the
+    // existing save on disk stays untouched — and say so on screen.
+    const bool writeOk = output.good();
     output.close();
+    if (!writeOk) {
+        SPDLOG_ERROR("Save write failed for fileNum: {} (device full?)", fileNum);
+        Notification::Emit({ .message = "SAVE FAILED - check free storage. Previous save kept." });
+        std::error_code tmpEc;
+        std::filesystem::remove(tempFile, tmpEc);
+        delete saveContext;
+        saveMtx.unlock();
+        return;
+    }
 #endif
 
 #if defined(__SWITCH__) || defined(__WIIU__)

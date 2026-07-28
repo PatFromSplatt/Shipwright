@@ -162,9 +162,18 @@ bool ModernMenuSidebarEntry(std::string label) {
     ImVec2 pos = window->DC.CursorPos;
     const ImGuiID sidebarId = window->GetID(std::string(label + "##Sidebar").c_str());
     ImVec2 labelSize = ImGui::CalcTextSize(label.c_str(), ImGui::FindRenderedTextEnd(label.c_str()), true);
-    pos.y += style.FramePadding.y;
+    // The hit rect used to be only as wide as the centred label inside a much wider sidebar,
+    // and shorter than the platform minimum touch target. Widen it to the full row and floor
+    // its height on touch; the label still draws at `pos`, which is unchanged.
+#if defined(__IOS__) || defined(__ANDROID__)
+    const float rowPadY = std::max(0.0f, (44.0f - labelSize.y) * 0.5f);
+#else
+    const float rowPadY = style.FramePadding.y;
+#endif
+    pos.y += rowPadY;
     pos.x = window->WorkRect.GetCenter().x - labelSize.x / 2;
-    ImRect bb = { pos - style.FramePadding, pos + labelSize + style.FramePadding };
+    ImRect bb = { ImVec2(window->WorkRect.Min.x, pos.y - rowPadY),
+                  ImVec2(window->WorkRect.Max.x, pos.y + labelSize.y + rowPadY) };
     ImGui::ItemSize(bb, style.FramePadding.y);
     ImGui::ItemAdd(bb, sidebarId);
     bool hovered, held;
@@ -172,7 +181,7 @@ bool ModernMenuSidebarEntry(std::string label) {
     if (pressed) {
         ImGui::MarkItemEdited(sidebarId);
     }
-    window->DrawList->AddRectFilled(pos - style.FramePadding, pos + labelSize + style.FramePadding,
+    window->DrawList->AddRectFilled(bb.Min, bb.Max,
                                     ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive
                                                        : hovered         ? ImGuiCol_ButtonHovered
                                                                          : ImGuiCol_Button),
@@ -709,13 +718,17 @@ void Menu::DrawElement() {
         scrollbar = true;
     }
     ImGui::SetNextWindowSizeConstraints({ 0, headerHeight }, { headerWidth, headerHeight });
+    // headerHeight already gained ScrollbarSize above when the strip overflows; adding it a
+    // second time here spent another gutter's worth of a menu that is only ~385pt tall on a
+    // phone, and mis-sized the section/column heights derived from it.
     ImVec2 headerSelSize = { menuSize.x - buttonSize.x * 3 - style.ItemSpacing.x * 3, headerHeight };
-    if (scrollbar) {
-        headerSelSize.y += style.ScrollbarSize;
-    }
     bool autoFocus = CVarGetInteger(CVAR_SETTING("Menu.SearchAutofocus"), 0);
-    ImGui::BeginChild("Header Selection", headerSelSize,
-                      ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize,
+    // Deliberately no AutoResizeX: with it, Begin overwrote the width computed above with the
+    // full tab-strip width, so on a phone the strip ran underneath the close/quit buttons and
+    // the red Quit button won the tap. The horizontal scrollbar handles the overflow instead --
+    // and with drag-to-scroll, the strip is swipeable. The max-width constraint still shrinks
+    // the child to the content on desktop, so nothing changes there.
+    ImGui::BeginChild("Header Selection", headerSelSize, ImGuiChildFlags_AutoResizeY,
                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_HorizontalScrollbar);
     uint8_t curIndex = 0;
     for (auto& label : menuOrder) {
@@ -774,6 +787,9 @@ void Menu::DrawElement() {
     options3.color = UIWidgets::Colors::Red;
     options3.size = UIWidgets::Sizes::Inline;
     options3.tooltip = "Quit SoH";
+#if !defined(__IOS__) && !defined(__ANDROID__)
+    // No Quit button on mobile: apps are closed from the app switcher, exit(0) reads as a
+    // crash, and this red button sits exactly where an overshooting tab-strip tap lands.
     if (UIWidgets::Button(ICON_FA_POWER_OFF, options3)) {
         SohGui::mModalWindow->RegisterPopup(
             "Quit SoH", "Are you sure you want to quit SoH?", "Quit", "Cancel",
@@ -787,13 +803,16 @@ void Menu::DrawElement() {
             },
             nullptr);
     }
+#endif
     ImGui::PopStyleVar();
     ImGui::SameLine();
     UIWidgets::ButtonOptions options2 = {};
     options2.color = UIWidgets::Colors::Red;
     options2.size = UIWidgets::Sizes::Inline;
     options2.tooltip = "Reset"
-#ifdef __APPLE__
+#if defined(__IOS__) || defined(__ANDROID__)
+                       "" // no keyboard: the hotkey hint would be a lie
+#elif defined(__APPLE__)
                        " (Command-R)"
 #elif !defined(__SWITCH__) && !defined(__WIIU__)
                        " (Ctrl+R)"
@@ -809,7 +828,11 @@ void Menu::DrawElement() {
     ImGui::SameLine();
     UIWidgets::ButtonOptions options = {};
     options.size = UIWidgets::Sizes::Inline;
+#if defined(__IOS__) || defined(__ANDROID__)
+    options.tooltip = "Close Menu (or tap the gear button)";
+#else
     options.tooltip = "Close Menu (Esc)";
+#endif
     if (UIWidgets::Button(ICON_FA_TIMES_CIRCLE, options)) {
         ToggleVisibility();
 
@@ -883,7 +906,15 @@ void Menu::DrawElement() {
     std::string sectionMenuId = sectionIndex + " Settings";
     size_t columns = sidebar->at(sectionIndex).columnCount;
     size_t columnFuncs = sidebar->at(sectionIndex).columnWidgets.size();
-    if (windowWidth < 800) {
+    // A label + control needs roughly 320pt at touch scale. Derive the column count from the
+    // available width instead of the fixed 800px breakpoint (which never fires on a 932pt
+    // phone, leaving three ~200pt columns that clip every long label). All-or-nothing rather
+    // than a clamp: the draw loop below iterates the AUTHORED column count but only calls
+    // SameLine() while i < columns - 1, so an intermediate value would strand the trailing
+    // column below the fold of this NoScrollbar parent, invisible and unreachable.
+    const float minColumnWidth =
+        320.0f * Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetUiScale();
+    if (sectionWidth < minColumnWidth * columns || windowWidth < 800) {
         columns = 1;
     }
     float columnWidth = (sectionWidth - style.ItemSpacing.x * columns) / columns;
@@ -933,7 +964,10 @@ void Menu::DrawElement() {
             }
             // for (auto& entryName : sidebar->at(sectionIndex).sidebarOrder) {
             for (auto& entry : sidebar->at(sectionIndex).columnWidgets.at(i)) {
-                MenuDrawItem(entry, 90 / sidebar->at(sectionIndex).columnCount, menuThemeIndex);
+                // Wrap against the columns actually drawn, not the authored count: when the
+                // layout collapses to one column on a phone, the old divisor still wrapped
+                // labels at a third of the width the column really has.
+                MenuDrawItem(entry, 90 / (uint32_t)columns, menuThemeIndex);
             }
             //}
             if (useColumns) {

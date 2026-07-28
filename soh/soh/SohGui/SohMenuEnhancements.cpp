@@ -1997,8 +1997,11 @@ void SohMenu::AddMenuEnhancements() {
             Ship::Context::GetRawInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         })
         .Options(IntSliderOptions().DefaultValue(0).Min(0).Max(8).Tooltip(
-            "Set the Beta Quest world to explore. *WARNING*: Changing this will reset your game!\n"
-            "Ctrl+Click to type in a value."));
+            "Set the Beta Quest world to explore. *WARNING*: Changing this will reset your game!"
+#if !defined(__IOS__) && !defined(__ANDROID__)
+            "\nCtrl+Click to type in a value."
+#endif
+            ));
 
     // Cosmetics Editor
     path.sidebarName = "Cosmetics Editor";

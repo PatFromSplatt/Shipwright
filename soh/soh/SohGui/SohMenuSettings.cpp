@@ -7,6 +7,10 @@
 #include "soh/ResourceManagerHelpers.h"
 #include "UIWidgets.hpp"
 #include <ship/controller/controldeck/ControlDeck.h>
+#ifdef __IOS__
+#include <ctime>
+extern "C" int64_t IOSGetSignatureExpiryUnix(void); // engine IOSCertInfo.mm
+#endif
 
 extern "C" {
 #include "include/z64audio.h"
@@ -526,6 +530,35 @@ void SohMenu::AddMenuSettings() {
         .Options(CheckboxOptions().DefaultValue(true).Tooltip(
             "Skips interpolated frames when the device cannot keep up, so the game runs at the "
             "correct speed instead of in slow motion. Turn off to restore the old behavior."));
+#ifdef __IOS__ // provisioning profiles are an iOS concept; Android has no expiring signature
+    AddWidget(path, "Sideload signature", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
+        // Free-Apple-ID installs stop launching when the 7-day signature lapses. Turn the
+        // scariest sideload failure into a predicted event — and remind the player that a
+        // re-install over the top keeps everything.
+        const int64_t expiry = IOSGetSignatureExpiryUnix();
+        if (expiry <= 0) {
+            return; // no provisioning profile (TrollStore etc.) — nothing to warn about
+        }
+        const int64_t now = (int64_t)time(nullptr);
+        const int64_t hoursLeft = (expiry - now) / 3600;
+        char dateBuf[32];
+        time_t t = (time_t)expiry;
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        strftime(dateBuf, sizeof(dateBuf), "%b %e", &tmv);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              hoursLeft < 48 ? ImVec4(1.0f, 0.55f, 0.3f, 1.0f) : ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+        if (hoursLeft < 0) {
+            ImGui::TextWrapped("App signature has expired - re-install from Sideloadly. "
+                               "Saves and game data are kept.");
+        } else {
+            ImGui::TextWrapped("Signed until %s (%lld days). Re-install from Sideloadly before then - "
+                               "saves and game data are kept.",
+                               dateBuf, (long long)(hoursLeft / 24));
+        }
+        ImGui::PopStyleColor();
+    });
+#endif // __IOS__
 #endif
 
     // Input Viewer
