@@ -55,6 +55,11 @@ int SDL_main(int argc, char* argv[]) {
     // Allow non-ascii characters for Windows
     setlocale(LC_ALL, ".UTF8");
 
+#elif defined(__IOS__)
+// iOS: SDL2main provides main(), runs UIApplicationMain, and calls SDL_main once the UIKit
+// application is alive. Naming this main() instead would skip the UIKit bootstrap entirely and
+// leave Metal with no application to attach to.
+int SDL_main(int argc, char* argv[]) {
 #else //_WIN32
 int main(int argc, char* argv[]) {
 #endif

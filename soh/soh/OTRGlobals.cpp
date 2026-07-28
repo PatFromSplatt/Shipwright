@@ -81,9 +81,12 @@
 #include "soh/SohGui/ImGuiUtils.h"
 #include "ActorDB.h"
 #include "SaveManager.h"
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
 #include "soh/Network/CrowdControl/CrowdControl.h"
 #include "soh/Network/Sail/Sail.h"
 #include "soh/Network/Anchor/Anchor.h"
+#endif
+
 #include "Enhancements/game-interactor/GameInteractor.h"
 #include "Enhancements/randomizer/draw.h"
 #include <libultraship/controller/controldeck/ControlDeck.h>
@@ -138,9 +141,12 @@ ItemTableManager* ItemTableManager::Instance;
 GameInteractor* GameInteractor::Instance;
 AudioCollection* AudioCollection::Instance;
 SpeechSynthesizer* SpeechSynthesizer::Instance;
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
 CrowdControl* CrowdControl::Instance;
 Sail* Sail::Instance;
 Anchor* Anchor::Instance;
+#endif
+
 
 extern "C" char** cameraStrings;
 
@@ -1549,7 +1555,7 @@ extern "C" void InitOTR(int argc, char* argv[]) {
 
     AudioCollection::Instance = new AudioCollection();
     ActorDB::Instance = new ActorDB();
-#ifdef __APPLE__
+#if defined(__APPLE__) && !defined(__IOS__)
     SpeechSynthesizer::Instance = new DarwinSpeechSynthesizer();
 #elif defined(_WIN32)
     SpeechSynthesizer::Instance = new SAPISpeechSynthesizer();
@@ -1560,9 +1566,12 @@ extern "C" void InitOTR(int argc, char* argv[]) {
 #endif
     SpeechSynthesizer::Instance->Init();
 
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
     CrowdControl::Instance = new CrowdControl();
     Sail::Instance = new Sail();
     Anchor::Instance = new Anchor();
+#endif
+
 
     OTRMessage_Init();
     OTRAudio_Init();
@@ -1588,6 +1597,7 @@ extern "C" void InitOTR(int argc, char* argv[]) {
     }
 
     srand(static_cast<unsigned int>(now));
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
     SDLNet_Init();
     if (CVarGetInteger(CVAR_REMOTE_CROWD_CONTROL("Enabled"), 0)) {
         CrowdControl::Instance->Enable();
@@ -1598,6 +1608,8 @@ extern "C" void InitOTR(int argc, char* argv[]) {
     if (CVarGetInteger(CVAR_REMOTE_ANCHOR("Enabled"), 0)) {
         Anchor::Instance->Enable();
     }
+#endif
+
     ShipInit::InitAll();
     Rando::StaticData::InitHashMaps();
     OTRGlobals::Instance->gRandoContext->AddExcludedOptions();
@@ -1610,6 +1622,7 @@ extern "C" void SaveManager_ThreadPoolWait() {
 extern "C" void DeinitOTR() {
     SaveManager_ThreadPoolWait();
     OTRAudio_Exit();
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
     if (CVarGetInteger(CVAR_REMOTE_CROWD_CONTROL("Enabled"), 0)) {
         CrowdControl::Instance->Disable();
     }
@@ -1620,6 +1633,8 @@ extern "C" void DeinitOTR() {
         Anchor::Instance->Disable();
     }
     SDLNet_Quit();
+#endif
+
 
     // Destroying gui here because we have shared ptrs to LUS objects which output to SPDLOG which is destroyed before
     // these shared ptrs.

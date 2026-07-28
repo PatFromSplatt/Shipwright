@@ -134,8 +134,16 @@ source_group("include" FILES ${Header_Files__include})
 # soh (root)
 file(GLOB_RECURSE soh__ RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "soh/*.c" "soh/*.cpp" "soh/*.h" "soh/*.hpp")
 
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # SDL2_net is not built for iOS, so the remote-control/network features are compiled out.
+    list(FILTER soh__ EXCLUDE REGEX "soh/Network/*")
+    list(FILTER soh__ EXCLUDE REGEX "SohMenuNetwork.cpp")
+endif()
+
 # Add specific files that don't match the pattern
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 list(APPEND soh__ ${CMAKE_CURRENT_SOURCE_DIR}/soh/Enhancements/speechsynthesizer/DarwinSpeechSynthesizer.mm)
+endif()
 
 # Create source groups that match the real file directory paths
 foreach(source IN LISTS soh__)
@@ -169,7 +177,7 @@ endif()
 # soh/Extractor {{{
 list(FILTER ship__ EXCLUDE REGEX "soh/Extractor/*")
 
-if(NOT CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch|CafeOS")
+if(NOT CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch|CafeOS|iOS")
     file(GLOB_RECURSE soh__Extractor RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
         "soh/Extractor/*.c"
         "soh/Extractor/*.cpp"

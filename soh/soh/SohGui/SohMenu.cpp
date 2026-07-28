@@ -87,7 +87,10 @@ void SohMenu::AddMenuElements() {
     AddMenuSettings();
     AddMenuEnhancements();
     AddMenuRandomizer();
+#ifndef __IOS__ // SDL2_net is not built for iOS; remote-control features are compiled out
     AddMenuNetwork();
+#endif
+
     AddMenuDevTools();
 
     if (CVarGetInteger(CVAR_SETTING("Menu.SidebarSearch"), 0)) {
