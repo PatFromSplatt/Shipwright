@@ -1037,7 +1037,7 @@ void OTRGlobals::ScaleImGui() {
     const float userScale = imguiScaleOptionToValue[imGuiScaleIndex];
     // Single owner of ImGui style scaling, so the user's multiplier composes with the platform
     // chrome scale rather than compounding on top of it.
-    const float scale = userScale * Ship::Context::GetInstance()->GetWindow()->GetGui()->GetUiScale();
+    const float scale = userScale * Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetUiScale();
     if (scale == previousImGuiScale) {
         return; // guard on the computed total, not the index, so gSettings.UIScale stays live
     }
@@ -1055,7 +1055,7 @@ void OTRGlobals::ScaleImGui() {
     // Fonts are real TTFs at authored point sizes, so only the user's own multiplier applies --
     // divided by the raster scale, since the atlas is rasterized that much larger to stay sharp.
     ImGui::GetIO().FontGlobalScale =
-        userScale / Ship::Context::GetInstance()->GetWindow()->GetGui()->GetFontRasterScale();
+        userScale / Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
 #if defined(__IOS__) || defined(__ANDROID__)
     sGrabPreFloor = ImGui::GetStyle().GrabMinSize;
     sScrollbarPreFloor = ImGui::GetStyle().ScrollbarSize;
