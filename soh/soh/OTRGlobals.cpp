@@ -1034,14 +1034,36 @@ OTRGlobals::~OTRGlobals() {
 
 void OTRGlobals::ScaleImGui() {
     int32_t imGuiScaleIndex = CVarGetInteger(CVAR_SETTING("ImGuiScale"), defaultImGuiScale);
-    if (imGuiScaleIndex == previousImGuiScaleIndex) {
-        return;
+    const float userScale = imguiScaleOptionToValue[imGuiScaleIndex];
+    // Single owner of ImGui style scaling, so the user's multiplier composes with the platform
+    // chrome scale rather than compounding on top of it.
+    const float scale = userScale * Ship::Context::GetInstance()->GetWindow()->GetGui()->GetUiScale();
+    if (scale == previousImGuiScale) {
+        return; // guard on the computed total, not the index, so gSettings.UIScale stays live
     }
 
-    float scale = imguiScaleOptionToValue[imGuiScaleIndex];
-    float newScale = scale / previousImGuiScale;
-    ImGui::GetStyle().ScaleAllSizes(newScale);
-    ImGui::GetIO().FontGlobalScale = scale;
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Undo the floors before rescaling: ScaleAllSizes multiplies the CURRENT value, so a floor
+    // applied last time is re-multiplied on every slider move and the gutter creeps wider.
+    static float sGrabPreFloor = -1.0f, sScrollbarPreFloor = -1.0f;
+    if (sGrabPreFloor > 0.0f) {
+        ImGui::GetStyle().GrabMinSize = sGrabPreFloor;
+        ImGui::GetStyle().ScrollbarSize = sScrollbarPreFloor;
+    }
+#endif
+    ImGui::GetStyle().ScaleAllSizes(scale / previousImGuiScale);
+    // Fonts are real TTFs at authored point sizes, so only the user's own multiplier applies --
+    // divided by the raster scale, since the atlas is rasterized that much larger to stay sharp.
+    ImGui::GetIO().FontGlobalScale =
+        userScale / Ship::Context::GetInstance()->GetWindow()->GetGui()->GetFontRasterScale();
+#if defined(__IOS__) || defined(__ANDROID__)
+    sGrabPreFloor = ImGui::GetStyle().GrabMinSize;
+    sScrollbarPreFloor = ImGui::GetStyle().ScrollbarSize;
+    // Absolute, not proportional. GrabMinSize is the grab's LENGTH; ScrollbarSize is the bar's
+    // WIDTH, and the bar is the fallback scroll target a finger has to be able to hit.
+    ImGui::GetStyle().GrabMinSize = std::max(ImGui::GetStyle().GrabMinSize, 44.0f);
+    ImGui::GetStyle().ScrollbarSize = std::max(ImGui::GetStyle().ScrollbarSize, 32.0f);
+#endif
     previousImGuiScale = scale;
     previousImGuiScaleIndex = imGuiScaleIndex;
 }

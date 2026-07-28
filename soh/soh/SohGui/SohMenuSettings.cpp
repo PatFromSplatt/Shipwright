@@ -457,6 +457,77 @@ void SohMenu::AddMenuSettings() {
         .HideInSearch(true)
         .Options(WindowButtonOptions().Tooltip("Enables the separate Bindings Window."));
 
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Touch Controls (the on-screen overlay is the primary input on mobile builds)
+    path.sidebarName = "Touch Controls";
+    path.column = SECTION_COLUMN_1;
+    AddSidebarEntry("Settings", "Touch Controls", 1);
+    // No enable/disable checkbox on purpose: with no keyboard attached, switching the overlay
+    // off would leave no way to reopen this menu. The eye pill handles hiding, recoverably.
+    AddWidget(path, "Opacity", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar("gTouch.Opacity")
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().DefaultValue(0.35f).IsPercentage().Tooltip(
+            "Opacity of the touch control overlay."));
+    AddWidget(path, "Button Scale", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar("gTouch.Scale")
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().DefaultValue(1.0f).Min(0.6f).Max(1.6f).Tooltip(
+            "Size multiplier for the touch buttons and stick."));
+    AddWidget(path, "Fixed Stick Base", WIDGET_CVAR_CHECKBOX)
+        .CVar("gTouch.FixedStick")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().Tooltip(
+            "Anchors the analog stick in place instead of it appearing where your thumb lands."));
+    AddWidget(path, "Edge-Hugging Layout", WIDGET_CVAR_CHECKBOX)
+        .CVar("gTouch.EdgeLayout")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().Tooltip(
+            "Moves the buttons out to the screen edges and corners. Off keeps the classic layout."));
+    AddWidget(path, "Camera Sensitivity", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar("gTouch.CameraSensitivity")
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().DefaultValue(1.0f).Min(0.2f).Max(3.0f).Tooltip(
+            "How fast dragging on the screen moves the camera."));
+    AddWidget(path, "Gyro Aiming", WIDGET_CVAR_CHECKBOX)
+        .CVar("gTouch.GyroEnabled")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().Tooltip(
+            "Tilt the device to aim while in first person (C-Up look, bow, hookshot, slingshot). "
+            "Does not affect the normal or Z-targeted camera."));
+    AddWidget(path, "Gyro Sensitivity", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar("gTouch.GyroSensitivity")
+        .RaceDisable(false)
+        .Options(FloatSliderOptions().DefaultValue(1.0f).Min(0.2f).Max(3.0f).Tooltip(
+            "How strongly device tilt affects aiming."));
+    AddWidget(path, "UI Scale", WIDGET_CVAR_SLIDER_FLOAT)
+        .CVar("gSettings.UIScale")
+        .RaceDisable(false)
+        .Callback([](WidgetInfo& info) { OTRGlobals::Instance->ScaleImGui(); })
+        .Options(FloatSliderOptions().DefaultValue(1.0f).Min(0.7f).Max(1.6f).Tooltip(
+            "Size of menu chrome (padding, buttons, sliders). Defaults are tuned so every control "
+            "meets the minimum comfortable touch size."));
+    AddWidget(path, "Crisp Fonts (restart)", WIDGET_CVAR_CHECKBOX)
+        .CVar("gSettings.CrispFonts")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().DefaultValue(true).Tooltip(
+            "Renders menu text at the screen's real pixel density instead of upscaling a smaller "
+            "font. Much sharper; uses more memory. Takes effect after restarting the app."));
+    AddWidget(path, "Native Resolution", WIDGET_CVAR_CHECKBOX)
+        .CVar("gSettings.NativeResolution")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().DefaultValue(true).Tooltip(
+            "Renders the game at the screen's true pixel resolution instead of a fraction of it. "
+            "Much sharper, but costs frame rate — turn off (or lower Internal Resolution) to "
+            "trade sharpness back for speed."));
+    AddWidget(path, "Frame Drop Catch-Up", WIDGET_CVAR_CHECKBOX)
+        .CVar("gSettings.FrameDropCatchUp")
+        .RaceDisable(false)
+        .Options(CheckboxOptions().DefaultValue(true).Tooltip(
+            "Skips interpolated frames when the device cannot keep up, so the game runs at the "
+            "correct speed instead of in slow motion. Turn off to restore the old behavior."));
+#endif
+
     // Input Viewer
     path.sidebarName = "Input Viewer";
     AddSidebarEntry("Settings", path.sidebarName, 3);
