@@ -47,6 +47,15 @@ sdcard
 ```
 * Launch via Atmosphere's `Game+R` launcher method.
 
+#### iPhone / iPad (this fork)
+This fork adds a native iOS build — no Mac needed to install it, no jailbreak.
+
+* Run one of the PC releases first to generate `oot.o2r` from your own supported ROM (see the Switch section above for where the file appears).
+* Download the `soh-ios` IPA from this fork's [Actions artifacts](../../actions), and sideload it with [Sideloadly](https://sideloadly.io/) (free Apple ID works; re-install every 7 days — **saves and game data are kept**, and the exact expiry date is shown in Settings → Touch Controls).
+* On first launch the app waits with instructions: tap **Open Files** and paste `oot.o2r` into `On My iPhone > SoH` (or use the Apple Devices app from Windows). The game starts by itself once the file is there. You can also AirDrop the file to the phone and pick **Open in SoH**.
+* Touch controls cover the whole game (floating stick, camera drag, ocarina keys, optional D-pad and gyro aiming, haptics with the game's Rumble Pak on the Taptic Engine). Pair a Bluetooth controller and the overlay hides itself. **Settings → Help** has a full How to Play page, and holding any setting for half a second explains it.
+* Autosave is on by default and also fires when you switch apps; **Settings → General → Back Up Saves Now** snapshots saves into a Files-visible folder.
+
 ### 4. Play!
 
 Congratulations, you are now sailing with the Ship of Harkinian! Have fun!
