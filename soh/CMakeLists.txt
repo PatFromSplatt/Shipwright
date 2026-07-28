@@ -627,11 +627,16 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
         ${CPU_OPTION}
         )
 
-        target_link_options(${PROJECT_NAME} PRIVATE
-            -pthread
-                #-fsanitize=address
-            -Wl,-export-dynamic
-        )
+        if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            # Xcode's linker rejects the GNU-style -export-dynamic spelling
+            target_link_options(${PROJECT_NAME} PRIVATE -pthread)
+        else()
+            target_link_options(${PROJECT_NAME} PRIVATE
+                -pthread
+                    #-fsanitize=address
+                -Wl,-export-dynamic
+            )
+        endif()
     endif()
 endif()
 ################################################################################
