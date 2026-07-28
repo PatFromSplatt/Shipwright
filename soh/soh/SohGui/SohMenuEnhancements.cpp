@@ -3,6 +3,7 @@
 #include "soh/Enhancements/SwitchAge.h"
 #include <soh/Enhancements/game-interactor/GameInteractor.h>
 #include <soh/OTRGlobals.h>
+#include <soh/Enhancements/savestates.h> // SaveStateMgr / RequestType for the touch buttons
 #include <soh/Enhancements/cosmetics/authenticGfxPatches.h>
 #include <soh/Enhancements/TimeDisplay/TimeDisplay.h>
 #include "soh/Enhancements/randomizer/randomizer.h"
@@ -1967,7 +1968,44 @@ void SohMenu::AddMenuEnhancements() {
     AddWidget(path, "I understand, enable save states", WIDGET_CVAR_CHECKBOX)
         .PreFunc([](WidgetInfo& info) { info.isHidden = CVarGetInteger(CVAR_CHEAT("SaveStatePromise"), 0) == 0; })
         .CVar(CVAR_CHEAT("SaveStatesEnabled"))
+#if defined(__IOS__) || defined(__ANDROID__)
+        .Options(CheckboxOptions().Tooltip("Shows Save / Load / Slot buttons below."));
+#else
         .Options(CheckboxOptions().Tooltip("F5 to save, F6 to change slots, F7 to load"));
+#endif
+#if defined(__IOS__) || defined(__ANDROID__)
+    // The entire save-state backend is otherwise reachable only through F5/F6/F7 —
+    // keys that do not exist on a phone.
+    AddWidget(path, "Save State Controls", WIDGET_CUSTOM)
+        .PreFunc([](WidgetInfo& info) {
+            info.isHidden = CVarGetInteger(CVAR_CHEAT("SaveStatesEnabled"), 0) == 0;
+        })
+        .CustomFunction([](WidgetInfo& info) {
+            if (CVarGetInteger(CVAR_CHEAT("SaveStatesEnabled"), 0) == 0) {
+                return;
+            }
+            auto& mgr = OTRGlobals::Instance->gSaveStateMgr;
+            const unsigned int slot = mgr->GetCurrentSlot();
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Slot %u", slot);
+            ImGui::SameLine();
+            if (ImGui::Button("-##ssSlotDown", ImVec2(44.0f, 0.0f))) {
+                mgr->SetCurrentSlot(slot == 0 ? 5 : slot - 1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+##ssSlotUp", ImVec2(44.0f, 0.0f))) {
+                mgr->SetCurrentSlot(slot >= 5 ? 0 : slot + 1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Save##ssSave")) {
+                mgr->AddRequest({ mgr->GetCurrentSlot(), RequestType::SAVE });
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Load##ssLoad")) {
+                mgr->AddRequest({ mgr->GetCurrentSlot(), RequestType::LOAD });
+            }
+        });
+#endif
 
     AddWidget(path, "Beta Quest", WIDGET_SEPARATOR_TEXT);
     AddWidget(path, "Enable Beta Quest", WIDGET_CVAR_CHECKBOX)

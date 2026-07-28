@@ -144,9 +144,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 
 # Add specific files that don't match the pattern
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+# AVSpeechSynthesizer works on iOS too (entitlement-free) - text-to-speech for blind players
+# is the whole reason this file exists, and a handheld is where it matters most.
 list(APPEND soh__ ${CMAKE_CURRENT_SOURCE_DIR}/soh/Enhancements/speechsynthesizer/DarwinSpeechSynthesizer.mm)
-endif()
 
 # Create source groups that match the real file directory paths
 foreach(source IN LISTS soh__)

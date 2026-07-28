@@ -24,7 +24,7 @@ void DarwinSpeechSynthesizer::Speak(const char* text, const char* language) {
     AVSpeechUtterance *utterance = [AVSpeechUtterance speechUtteranceWithString:@(text)];
     [utterance setVoice:[AVSpeechSynthesisVoice voiceWithLanguage:@(language)]];
 
-    if (@available(macOS 11.0, *)) {
+    if (@available(macOS 11.0, iOS 14.0, *)) {
         [utterance setPrefersAssistiveTechnologySettings:YES];
     }
 
