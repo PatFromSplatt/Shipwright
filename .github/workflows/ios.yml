@@ -1,0 +1,154 @@
+name: ios
+
+on:
+  push:
+    branches: [ios]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Mirrors upstream's generate-soh-otr job. GenerateSohOtr runs with --norom, so no game
+  # content is ever present in CI: soh.o2r contains only the port's own assets.
+  generate-soh-otr:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: true
+    - name: Compute o2r cache key
+      id: o2rkey
+      run: echo "key=otr-$(git rev-parse HEAD:soh/assets)-$(git rev-parse HEAD:OTRExporter)-$(git rev-parse HEAD:CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+    - name: Cache soh.o2r
+      id: o2rcache
+      uses: actions/cache@v4
+      with:
+        path: soh.o2r
+        key: ${{ steps.o2rkey.outputs.key }}
+    - name: Install dependencies
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y $(cat linux-build-deps/apt.txt)
+    - name: Create deps folder
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: mkdir -p deps
+    - name: Install latest SDL
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: |
+        if [ ! -d "deps/SDL2-2.30.3" ]; then
+          wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.tar.gz
+          tar -xzf SDL2-2.30.3.tar.gz -C deps
+        fi
+        cd deps/SDL2-2.30.3
+        ./configure --enable-hidapi-libusb
+        make -j 10
+        sudo make install
+        sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+    - uses: ./.github/actions/install-sdl2-net
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+    - name: Copy SDL libs to multiarch dir
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+    - name: Remove distro tinyxml2
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: sudo apt-get remove libtinyxml2-dev
+    - uses: ./.github/actions/install-tinyxml2
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+    - name: Generate soh.o2r
+      if: steps.o2rcache.outputs.cache-hit != 'true'
+      run: |
+        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release
+        cmake --build build-cmake --config Release --target GenerateSohOtr -j3
+    - name: Upload soh.o2r
+      uses: actions/upload-artifact@v7
+      with:
+        name: soh.o2r
+        path: soh.o2r
+        retention-days: 3
+
+  build-ios:
+    needs: generate-soh-otr
+    runs-on: macos-15
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: true
+    - name: Install build tools
+      run: brew install ninja
+    - name: Configure ccache
+      uses: hendrikmuhs/ccache-action@v1.2.23
+      with:
+        key: ios-build
+        max-size: "1G"
+        evict-old-files: job
+    - name: Cache codec deps
+      id: cache-codec-deps
+      uses: actions/cache@v4
+      with:
+        path: ios-deps-prefix
+        key: ${{ runner.os }}-ios-codec-deps-${{ hashFiles('.github/scripts/build-ios-deps.sh') }}
+    - name: Build codec deps (ogg/vorbis/opus/opusfile/libpng)
+      if: steps.cache-codec-deps.outputs.cache-hit != 'true'
+      run: bash .github/scripts/build-ios-deps.sh "$PWD/ios-deps-prefix"
+    - name: Configure (iphoneos arm64, Metal-only)
+      env:
+        CCACHE_SLOPPINESS: pch_defines,time_macros
+      run: |
+        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT=iphoneos \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+          -DPLATFORM=OS64 \
+          -DDEPLOYMENT_TARGET=16.0 \
+          -DCMAKE_BUILD_TYPE:STRING=Release \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_PREFIX_PATH="$PWD/ios-deps-prefix" \
+          -DCMAKE_FIND_ROOT_PATH="$PWD/ios-deps-prefix" \
+          -DENABLE_SCRIPTING=OFF \
+          -DDISABLE_DLL_LOADER=ON \
+          -DBUNDLE_ID=com.patricklm.shipofharkinian
+    - name: Download soh.o2r
+      uses: actions/download-artifact@v7
+      with:
+        name: soh.o2r
+        path: build-cmake/soh
+    - name: Build
+      env:
+        CCACHE_SLOPPINESS: pch_defines,time_macros
+      run: cmake --build build-cmake --target soh -j3
+    - name: Generate app icons
+      run: |
+        APP=$(find build-cmake -name "*.app" -type d | head -1)
+        sips -z 120 120 soh/macosx/sohIcon.png --out "$APP/Icon-60@2x.png" || true
+        sips -z 180 180 soh/macosx/sohIcon.png --out "$APP/Icon-60@3x.png" || true
+    - name: Convert Info.plist to binary (sideload-tool compatibility)
+      run: |
+        APP=$(find build-cmake -name "*.app" -type d | head -1)
+        plutil -convert binary1 "$APP/Info.plist"
+        plutil -lint "$APP/Info.plist"
+    - name: Package unsigned IPA
+      run: |
+        APP=$(find build-cmake -name "*.app" -type d | head -1)
+        echo "Bundling $APP"
+        test -n "$APP"
+        mkdir -p Payload
+        cp -R "$APP" Payload/
+        zip -qry soh-ios.ipa Payload
+    - name: Upload IPA
+      uses: actions/upload-artifact@v7
+      with:
+        name: soh-ios-ipa
+        path: soh-ios.ipa
+        retention-days: 7

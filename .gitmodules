@@ -1,7 +1,7 @@
 [submodule "libultraship"]
 	path = libultraship
-	url = https://github.com/kenix3/libultraship.git
-	branch = port-maintenance
+	url = https://github.com/PatFromSplatt/libultraship.git
+	branch = ios-lus-c57da1b4
 [submodule "ZAPDTR"]
 	path = ZAPDTR
 	url = https://github.com/harbourmasters/ZAPDTR
