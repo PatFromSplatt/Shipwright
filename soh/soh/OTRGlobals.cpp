@@ -791,11 +791,21 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
 
                 if (!ootO2RExists) {
 #ifdef __IOS__
+                    // WAIT, never exit: exiting made a fresh install look like a crash and
+                    // forced a relaunch dance. The popup offers an Open Files jump straight
+                    // into this app's folder; the render section below watches for the file
+                    // and auto-dismisses the moment it lands, which loops back here and boots.
                     SohGui::RegisterPopup("Ship of Harkinian needs game data",
-                                          "oot.o2r was not found.\n\nCopy oot.o2r into this app's folder, then "
-                                          "relaunch:\n\nFrom Windows: Apple Devices app > iPhone > Files > SoH\n"
-                                          "On this phone: Files app > On My iPhone > SoH",
-                                          "OK", "", [&]() { exit(0); });
+                                          "oot.o2r was not found. Generate it with the DESKTOP version of Ship of "
+                                          "Harkinian from your own Ocarina of Time ROM.\n\nThen, WITHOUT closing "
+                                          "this app, copy oot.o2r into this app's folder:\n\nOn this phone: Open "
+                                          "Files below, then paste into On My iPhone > SoH\nFrom Windows: Apple "
+                                          "Devices app > iPhone > Files > SoH\n\nThe game will start by itself "
+                                          "once the file is there.",
+                                          "Open Files", "", [&]() {
+                                              SDL_OpenURL(("shareddocuments://" + dataPath).c_str());
+                                          });
+                    goto render; // stay in ES_VERIFY; do NOT mark extraction done
 #else
                     SohGui::RegisterPopup("No ROM Archives",
                                           "No ROM O2R files detected. Please generate a ROM O2R and relaunch.", "OK",
@@ -828,6 +838,15 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
         gui->StartDraw();
         sohFast3dWindow->StartFrame();
         sohFast3dWindow->RunGuiOnly();
+#ifdef __IOS__
+        // The moment oot.o2r lands in Documents (pasted via the Files app while the waiting
+        // popup is up), dismiss it — the loop re-runs ES_VERIFY, which now passes and boots.
+        if (extractStep == ES_VERIFY &&
+            (std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName)) ||
+             std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot-mq.o2r", appShortName)))) {
+            SohGui::DismissPopup("Ship of Harkinian needs game data");
+        }
+#endif
         if (extractionTask.has_value()) {
             auto status = extractionTask->wait_for(std::chrono::milliseconds(0));
             if (status == std::future_status::ready) {
