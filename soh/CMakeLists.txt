@@ -104,7 +104,7 @@ if (NOT TARGET libultraship)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../libultraship ${CMAKE_BINARY_DIR}/libultraship)
 endif()
 
-if (NOT TARGET ZAPDLib)
+if (NOT TARGET ZAPDLib AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../ZAPDTR/ZAPD ${CMAKE_BINARY_DIR}/ZAPD)
 endif()
 
@@ -262,6 +262,23 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
         OUTPUT_NAME "soh-macos"
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
+        OUTPUT_NAME "soh"
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in
+        MACOSX_BUNDLE_EXECUTABLE_NAME "soh"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${CMAKE_PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${CMAKE_PROJECT_VERSION}
+    )
+    # Bundle the port assets and controller db next to the executable inside the .app.
+    # soh.o2r is produced by a host build and dropped into the build dir by CI.
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_BINARY_DIR}/soh/soh.o2r $<TARGET_BUNDLE_DIR:${PROJECT_NAME}>/soh.o2r
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_BINARY_DIR}/gamecontrollerdb.txt $<TARGET_BUNDLE_DIR:${PROJECT_NAME}>/gamecontrollerdb.txt)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME "soh.elf"
@@ -393,6 +410,24 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
         "SPDLOG_NO_THREAD_ID;"
         "SPDLOG_NO_TLS;"
         "STBI_NO_THREAD_LOCALS;"
+        SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
+        LOG_LEVEL_GAME_PRINTS=${SPDLOG_LEVEL_OFF}
+    )
+elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # Same as the Clang branch below, minus ENABLE_OPENGL (Metal-only) plus __IOS__.
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        "$<$<CONFIG:Debug>:"
+            "_DEBUG;"
+        ">"
+        "$<$<CONFIG:Release>:"
+            "NDEBUG;"
+        ">"
+        "F3DEX_GBI_2;"
+        "_CONSOLE;"
+        "_CRT_SECURE_NO_WARNINGS;"
+        "__IOS__;"
+        "UNICODE;"
+        "_UNICODE;"
         SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
         LOG_LEVEL_GAME_PRINTS=${SPDLOG_LEVEL_OFF}
     )
@@ -698,6 +733,31 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
     )
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${DEVKITPRO}/portlibs/wiiu/include/
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # SDL2 targets already exist via libultraship's FetchContent. No ZAPDLib (host tool) and no
+    # SDL2_net (remote-control features are compiled out on iOS). Codec libs are cross-compiled
+    # static libs supplied through CMAKE_PREFIX_PATH by CI.
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    find_package(Threads REQUIRED)
+    find_package(Ogg REQUIRED)
+    find_package(Vorbis REQUIRED)
+    find_package(Opus REQUIRED)
+    find_package(OpusFile REQUIRED)
+    find_package(PNG REQUIRED)
+    set(ADDITIONAL_LIBRARY_DEPENDENCIES
+        "libultraship;"
+        SDL2::SDL2
+        SDL2::SDL2main
+        "Ogg::ogg"
+        "Vorbis::vorbis"
+        "Vorbis::vorbisenc"
+        "Vorbis::vorbisfile"
+        "Opus::opus"
+        "Opusfile::Opusfile"
+        "PNG::PNG"
+        ${CMAKE_DL_LIBS}
+        Threads::Threads
     )
 else()
     find_package(SDL2)

@@ -281,7 +281,37 @@ static bool VerifyArchiveVersion(OTRVersion version);
 std::string portArchivePath = "";
 static bool sohArchiveVersionMatch = false;
 
+#ifdef __IOS__
+#include <unistd.h>
+// Make the app's Documents directory behave like a desktop install dir: it becomes the working
+// directory (the game reads and writes archives, config and saves with relative paths), and the
+// bundled port assets are refreshed into it so version checks always match the binary.
+static void IOS_PrepareAppDirectory() {
+    std::string dataPath = Ship::Context::GetAppDirectoryPath(appShortName);
+    std::error_code ec;
+    std::filesystem::create_directories(dataPath, ec);
+    chdir(dataPath.c_str());
+
+    const std::string bundlePath = Ship::Context::GetAppBundlePath();
+    const std::string bundleO2r = bundlePath + "/soh.o2r";
+    const std::string dataO2r = dataPath + "/soh.o2r";
+    std::error_code sizeEc;
+    if (std::filesystem::exists(bundleO2r) &&
+        (!std::filesystem::exists(dataO2r) ||
+         std::filesystem::file_size(dataO2r, sizeEc) != std::filesystem::file_size(bundleO2r, sizeEc))) {
+        std::filesystem::copy_file(bundleO2r, dataO2r, std::filesystem::copy_options::overwrite_existing, ec);
+    }
+    const std::string bundleDb = bundlePath + "/gamecontrollerdb.txt";
+    if (std::filesystem::exists(bundleDb) && !std::filesystem::exists(dataPath + "/gamecontrollerdb.txt")) {
+        std::filesystem::copy_file(bundleDb, dataPath + "/gamecontrollerdb.txt", ec);
+    }
+}
+#endif
+
 OTRGlobals::OTRGlobals() {
+#ifdef __IOS__
+    IOS_PrepareAppDirectory();
+#endif
     context = Ship::Context::CreateUninitializedInstance("Ship of Harkinian", appShortName, "shipofharkinian.json");
 
     portArchivePath = Ship::Context::LocateFileAcrossAppDirs("soh.o2r");
@@ -420,7 +450,9 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
             args.push_back(argv[i]);
         }
     }
+#ifndef __IOS__
     Extractor extract;
+#endif
     PromptSteps promptStep = PS_FILE_CHECK;
     bool generatedIsMQ = false;
     std::atomic<size_t> extractCount = 0, totalExtract = 0;
@@ -473,7 +505,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                 if (sohArchiveVersionMatch) {
 #ifdef _WIN32
                     extractStep = ES_WINDOWS;
-#elif (defined(__WIIU__) || defined(__SWITCH__))
+#elif (defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__))
                     extractStep = ES_VERIFY;
 #else
                     extractStep = args.empty() ? ES_EXTRACT : ES_EXTRACT_ARGS;
@@ -571,7 +603,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                 break;
             }
             case ES_EXTRACT_ARGS: {
-#if !defined(__SWITCH__) && !defined(__WIIU__)
+#if !defined(__SWITCH__) && !defined(__WIIU__) && !defined(__IOS__)
                 if (args.empty()) {
                     SohGui::RegisterPopup(
                         "Run Ship of Harkinian", "All files have been processed. Run SoH?", "Yes", "No",
@@ -622,6 +654,11 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                 break;
             }
             case ES_EXTRACT: {
+#ifdef __IOS__
+                // No in-app extraction on iOS; the archives arrive via the Files app.
+                extractStep = ES_VERIFY;
+                break;
+#else
                 switch (promptStep) {
                     case PS_FILE_CHECK: {
                         const bool ootO2RExists =
@@ -694,6 +731,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                         break;
                 }
                 break;
+#endif
             }
             case ES_VERIFY: {
                 const bool ootO2RExists =
@@ -701,9 +739,17 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                     std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
 
                 if (!ootO2RExists) {
+#ifdef __IOS__
+                    SohGui::RegisterPopup("Ship of Harkinian needs game data",
+                                          "oot.o2r was not found.\n\nCopy oot.o2r into this app's folder, then "
+                                          "relaunch:\n\nFrom Windows: Apple Devices app > iPhone > Files > SoH\n"
+                                          "On this phone: Files app > On My iPhone > SoH",
+                                          "OK", "", [&]() { exit(0); });
+#else
                     SohGui::RegisterPopup("No ROM Archives",
                                           "No ROM O2R files detected. Please generate a ROM O2R and relaunch.", "OK",
                                           "", [&]() { exit(0); });
+#endif
                 }
                 extractDone = true;
                 continue;
