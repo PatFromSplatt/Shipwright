@@ -138,6 +138,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     # SDL2_net is not built for iOS, so the remote-control/network features are compiled out.
     list(FILTER soh__ EXCLUDE REGEX "soh/Network/*")
     list(FILTER soh__ EXCLUDE REGEX "SohMenuNetwork.cpp")
+    # The Extractor calls into ZAPD (zapd_report), which is a host-only tool not linked on iOS.
+    # It also relies on portable-file-dialogs, which can never return a file inside the sandbox.
+    list(FILTER soh__ EXCLUDE REGEX "soh/Extractor/*")
 endif()
 
 # Add specific files that don't match the pattern
