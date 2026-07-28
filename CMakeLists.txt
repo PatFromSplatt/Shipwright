@@ -223,6 +223,7 @@ endif()
 
 find_package(Python3 COMPONENTS Interpreter)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 # Target to generate OTRs
 add_custom_target(
     ExtractAssets
@@ -264,6 +265,7 @@ add_custom_target(
     COMMENT "Generating soh.o2r..."
     DEPENDS ZAPD
 )
+endif() # NOT iOS (host asset tooling)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Linux")
     find_package(ImageMagick COMPONENTS convert)
