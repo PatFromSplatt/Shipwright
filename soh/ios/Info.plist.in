@@ -31,9 +31,9 @@
 	<key>DTPlatformName</key>
 	<string>iphoneos</string>
 	<key>DTPlatformVersion</key>
-	<string>18.5</string>
+	<string>26.5</string>
 	<key>DTSDKName</key>
-	<string>iphoneos18.5</string>
+	<string>iphoneos26.5</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

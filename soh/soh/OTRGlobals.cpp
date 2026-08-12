@@ -414,7 +414,7 @@ OTRGlobals::OTRGlobals() {
     }
 
     previousImGuiScaleIndex = -1;
-    previousImGuiScale = defaultImGuiScale;
+    previousImGuiScale = 1.0f; // the scale the style is currently at, NOT an option index
     ScaleImGui();
 }
 
@@ -1136,8 +1136,16 @@ void OTRGlobals::ScaleImGui() {
     ImGui::GetStyle().ScaleAllSizes(scale / previousImGuiScale);
     // Fonts are real TTFs at authored point sizes, so only the user's own multiplier applies --
     // divided by the raster scale, since the atlas is rasterized that much larger to stay sharp.
+#if defined(__IOS__) || defined(__ANDROID__)
+    // Text-only trim: authored sizes (20pt body / 24pt headers) land ~18% over the iOS body
+    // standard of 17pt and read oversized on the phone. 0.85 brings body text to exactly 17pt
+    // without touching chrome; the user's Menu Scaling option still multiplies on top.
+    constexpr float kTouchTextScale = 0.85f;
+#else
+    constexpr float kTouchTextScale = 1.0f;
+#endif
     ImGui::GetIO().FontGlobalScale =
-        userScale / Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
+        userScale * kTouchTextScale / Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
 #if defined(__IOS__) || defined(__ANDROID__)
     sGrabPreFloor = ImGui::GetStyle().GrabMinSize;
     sScrollbarPreFloor = ImGui::GetStyle().ScrollbarSize;
@@ -2083,6 +2091,19 @@ std::map<std::string, SoundFontSample*> cachedCustomSFs;
 
 ImFont* OTRGlobals::CreateFontWithSize(float size, std::string fontPath, bool isJapaneseFont) {
     auto mImGuiIo = &ImGui::GetIO();
+    // Rasterize at device pixel density; ScaleImGui divides FontGlobalScale by the same
+    // factor, so the displayed size is unchanged but the glyphs are sharp. This multiply is
+    // the other half of that scheme — without it fonts raster at 1x, the divide still
+    // happens, and all menu text renders at a third of its authored size on a 3x phone.
+    // The Japanese font is capped at 2x raster: its full CJK glyph range at 3x would balloon
+    // the atlas texture (slightly softer JP glyphs beat a Metal texture-size failure); the
+    // per-font Scale below compensates so it still DISPLAYS at authored size.
+    const float fullRasterScale = Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetFontRasterScale();
+    float rasterScale = fullRasterScale;
+    if (isJapaneseFont && rasterScale > 2.0f) {
+        rasterScale = 2.0f;
+    }
+    size *= rasterScale;
     ImFont* font;
     if (fontPath == "") {
         ImFontConfig fontCfg = ImFontConfig();
@@ -2113,6 +2134,11 @@ ImFont* OTRGlobals::CreateFontWithSize(float size, std::string fontPath, bool is
     iconsConfig.GlyphMinAdvanceX = iconFontSize;
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
+    // FontGlobalScale divides by the FULL raster scale; a font rastered below it (the capped
+    // Japanese atlas) carries the remainder per-font so it displays at authored size.
+    if (font != nullptr && rasterScale != fullRasterScale && rasterScale > 0.0f) {
+        font->Scale = fullRasterScale / rasterScale;
+    }
     return font;
 }
 

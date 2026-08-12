@@ -75,18 +75,28 @@ jobs:
 
   build-ios:
     needs: generate-soh-otr
-    runs-on: macos-15
+    runs-on: macos-26
+    env:
+      # Pin the toolchain: the image's default Xcode rotates every ~6 weeks. Xcode 26.6
+      # carries the iOS 26.5 SDK; deployment target stays 16.0, so nothing about install
+      # or device support changes — the app is simply built fully native for iOS 26.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
     - name: Git Checkout
       uses: actions/checkout@v7
       with:
         submodules: true
+    - name: Verify toolchain
+      run: |
+        xcodebuild -version
+        xcrun --sdk iphoneos --show-sdk-version
+        test "$(xcrun --sdk iphoneos --show-sdk-version)" = "26.5"
     - name: Install build tools
       run: brew install ninja
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.23
       with:
-        key: ios-build
+        key: ios-build-xcode26
         max-size: "1G"
         evict-old-files: job
     - name: Cache codec deps
@@ -94,7 +104,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ios-deps-prefix
-        key: ${{ runner.os }}-ios-codec-deps-${{ hashFiles('.github/scripts/build-ios-deps.sh') }}
+        key: ${{ runner.os }}-ios-codec-deps-xcode26-${{ hashFiles('.github/scripts/build-ios-deps.sh') }}
     - name: Build codec deps (ogg/vorbis/opus/opusfile/libpng)
       if: steps.cache-codec-deps.outputs.cache-hit != 'true'
       run: bash .github/scripts/build-ios-deps.sh "$PWD/ios-deps-prefix"
@@ -133,6 +143,14 @@ jobs:
         APP=$(find build-cmake -name "*.app" -type d | head -1)
         sips -z 120 120 soh/macosx/sohIcon.png --out "$APP/Icon-60@2x.png" || true
         sips -z 180 180 soh/macosx/sohIcon.png --out "$APP/Icon-60@3x.png" || true
+    - name: Stamp SDK metadata in Info.plist
+      run: |
+        # Bare CMake+Ninja never stamps DT* keys the way xcodebuild would; keep them honest
+        # by writing the actual SDK the binary was built against.
+        APP=$(find build-cmake -name "*.app" -type d | head -1)
+        SDKV=$(xcrun --sdk iphoneos --show-sdk-version)
+        plutil -replace DTPlatformVersion -string "$SDKV" "$APP/Info.plist"
+        plutil -replace DTSDKName -string "iphoneos$SDKV" "$APP/Info.plist"
     - name: Convert Info.plist to binary (sideload-tool compatibility)
       run: |
         APP=$(find build-cmake -name "*.app" -type d | head -1)
