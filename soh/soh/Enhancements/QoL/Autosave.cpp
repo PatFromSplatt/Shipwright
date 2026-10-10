@@ -5,7 +5,7 @@
 #include "soh/ShipInit.hpp"
 #include "soh/SaveManager.h"
 #if defined(__IOS__) || defined(__ANDROID__)
-#include <ship/port/mobile/MobileImpl.h> // ConsumeBackgroundSaveRequest
+#include <ship/port/mobile/MobileImpl.h> // ConsumeBackgroundSaveRequest, SetBackgroundSaveHandler
 #endif
 
 extern "C" {
@@ -16,6 +16,11 @@ extern PlayState* gPlayState;
 }
 
 static uint64_t lastSaveTimestamp;
+#if defined(__IOS__) || defined(__ANDROID__)
+// True when the most recent tick already saved for a background request, so the park handler
+// only has to wait for that write.
+static bool sTickSavedForBackground = false;
+#endif
 
 #define CVAR_AUTOSAVE_NAME CVAR_ENHANCEMENT("Autosave")
 #define CVAR_AUTOSAVE_DEFAULT AUTOSAVE_OFF
@@ -62,7 +67,9 @@ static void Autosave_IntervalSave() {
     // after the switch-away, so "user left" must mean "progress is on disk" regardless of how
     // recently the timer fired. This runs on the game thread — the lifecycle callback only
     // sets a flag — and the CanSave/pause gates below still apply.
-    if (Ship::Mobile::ConsumeBackgroundSaveRequest()) {
+    sTickSavedForBackground = false;
+    const bool backgroundRequested = Ship::Mobile::ConsumeBackgroundSaveRequest();
+    if (backgroundRequested) {
         lastSaveTimestamp = 0;
     }
 #endif
@@ -79,6 +86,9 @@ static void Autosave_IntervalSave() {
         lastSaveTimestamp = currentTimestamp;
 
         Autosave_PerformSave();
+#if defined(__IOS__) || defined(__ANDROID__)
+        sTickSavedForBackground = backgroundRequested;
+#endif
     }
 }
 
@@ -88,8 +98,33 @@ static void Autosave_SoftResetSave() {
     }
 }
 
+#if defined(__IOS__) || defined(__ANDROID__)
+// Called by the engine when the app parks on its way to the background (home swipe, app
+// switcher, Control Center, Siri): on the game thread between ticks, inside a UIKit background
+// task that ends when this returns. No tick runs again until resume, so the write has to be on
+// disk before returning. Pausing and then switching away is the usual way out, so only the
+// CanSave gate applies here, not the interval save's pause gate.
+static void Autosave_BackgroundSave() {
+    Ship::Mobile::ConsumeBackgroundSaveRequest();
+    const bool tickAlreadySaved = sTickSavedForBackground;
+    sTickSavedForBackground = false;
+    // gPlayState is null outside gameplay (file select); CanSave rejects the title-screen demo.
+    if (CVAR_AUTOSAVE_VALUE && gPlayState != nullptr && !tickAlreadySaved && Autosave_CanSave()) {
+        lastSaveTimestamp = GetUnixTimestamp();
+        Autosave_PerformSave();
+    }
+    // Saves run on the save pool. Wait even when nothing was queued here, so a pause-menu save
+    // or this tick's autosave still reaches the disk inside the background task.
+    SaveManager::Instance->ThreadPoolWait();
+}
+#endif
+
 static void RegisterAutosave() {
     lastSaveTimestamp = GetUnixTimestamp();
+#if defined(__IOS__) || defined(__ANDROID__)
+    sTickSavedForBackground = false;
+    Ship::Mobile::SetBackgroundSaveHandler(Autosave_BackgroundSave);
+#endif
     COND_HOOK(GameInteractor::OnLoadGame, CVAR_AUTOSAVE_VALUE,
               [](uint32_t fileNme) { lastSaveTimestamp = GetUnixTimestamp(); });
     COND_HOOK(GameInteractor::OnGameFrameUpdate, CVAR_AUTOSAVE_VALUE, Autosave_IntervalSave);
