@@ -289,7 +289,58 @@ std::string portArchivePath = "";
 static bool sohArchiveVersionMatch = false;
 
 #ifdef __IOS__
+#include <cstring>
 #include <unistd.h>
+
+static bool IOS_FilesIdentical(const std::string& a, const std::string& b) {
+    std::error_code ec;
+    const uintmax_t sizeA = std::filesystem::file_size(a, ec);
+    if (ec) {
+        return false;
+    }
+    const uintmax_t sizeB = std::filesystem::file_size(b, ec);
+    if (ec || sizeA != sizeB) {
+        return false;
+    }
+    std::ifstream fileA(a, std::ios::binary);
+    std::ifstream fileB(b, std::ios::binary);
+    if (!fileA || !fileB) {
+        return false;
+    }
+    std::vector<char> bufA(1 << 16);
+    std::vector<char> bufB(1 << 16);
+    while (fileA && fileB) {
+        fileA.read(bufA.data(), bufA.size());
+        fileB.read(bufB.data(), bufB.size());
+        if (fileA.gcount() != fileB.gcount() ||
+            std::memcmp(bufA.data(), bufB.data(), static_cast<size_t>(fileA.gcount())) != 0) {
+            return false;
+        }
+    }
+    return fileA.eof() && fileB.eof();
+}
+
+// Compares content, not size: a version-only release changes nothing but the fixed-size
+// portVersion entry, so the old and new soh.o2r can be the same size. Written through a temp
+// file so an interrupted copy (app killed, storage full) never replaces a good file with a
+// truncated one.
+static void IOS_RefreshBundledFile(const std::string& bundleFile, const std::string& dataFile) {
+    if (!std::filesystem::exists(bundleFile) || IOS_FilesIdentical(bundleFile, dataFile)) {
+        return;
+    }
+    const std::string tmpFile = dataFile + ".tmp";
+    std::error_code ec;
+    std::filesystem::copy_file(bundleFile, tmpFile, std::filesystem::copy_options::overwrite_existing, ec);
+    if (!ec) {
+        std::filesystem::rename(tmpFile, dataFile, ec);
+    }
+    if (ec) {
+        SPDLOG_ERROR("Could not refresh {} from the app bundle: {}", dataFile, ec.message());
+        std::error_code removeEc;
+        std::filesystem::remove(tmpFile, removeEc);
+    }
+}
+
 // Make the app's Documents directory behave like a desktop install dir: it becomes the working
 // directory (the game reads and writes archives, config and saves with relative paths), and the
 // bundled port assets are refreshed into it so version checks always match the binary.
@@ -305,22 +356,8 @@ static void IOS_PrepareAppDirectory() {
     // the app, and updates could never refresh it.
     Ship::FolderManager folderManager;
     const std::string bundlePath = folderManager.getMainBundlePath();
-    const std::string bundleO2r = bundlePath + "/soh.o2r";
-    const std::string dataO2r = dataPath + "/soh.o2r";
-    std::error_code sizeEc;
-    if (std::filesystem::exists(bundleO2r) &&
-        (!std::filesystem::exists(dataO2r) ||
-         std::filesystem::file_size(dataO2r, sizeEc) != std::filesystem::file_size(bundleO2r, sizeEc))) {
-        std::filesystem::copy_file(bundleO2r, dataO2r, std::filesystem::copy_options::overwrite_existing, ec);
-    }
-    // Same size-mismatch refresh for the controller database, so app updates propagate it.
-    const std::string bundleDb = bundlePath + "/gamecontrollerdb.txt";
-    const std::string dataDb = dataPath + "/gamecontrollerdb.txt";
-    if (std::filesystem::exists(bundleDb) &&
-        (!std::filesystem::exists(dataDb) ||
-         std::filesystem::file_size(dataDb, sizeEc) != std::filesystem::file_size(bundleDb, sizeEc))) {
-        std::filesystem::copy_file(bundleDb, dataDb, std::filesystem::copy_options::overwrite_existing, ec);
-    }
+    IOS_RefreshBundledFile(bundlePath + "/soh.o2r", dataPath + "/soh.o2r");
+    IOS_RefreshBundledFile(bundlePath + "/gamecontrollerdb.txt", dataPath + "/gamecontrollerdb.txt");
 
     // Files shared to this app ("Open in ...") land in Documents/Inbox; a game archive is
     // useless there. Sweep any *.o2r into Documents proper so a cold-launched share of the
@@ -603,6 +640,12 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                     msg = "Please extract the soh.o2r from the Ship of Harkinian download\nto your folder.\n\nPress "
                           "and hold the power\n"
                           "button to shutdown...";
+#elif defined(__IOS__)
+                    // soh.o2r ships inside the app and is refreshed into Documents on every
+                    // launch, so this only happens when that copy failed or the build is broken.
+                    msg = "The game data that comes with this app (soh.o2r) could not be set up.\n\nFree up some "
+                          "storage and open the app again. If this keeps happening, re-install the app - your "
+                          "saves and oot.o2r are kept.\n\nExiting...";
 #else
                     msg =
                         "Please extract the soh.o2r from the Ship of Harkinian download to your folder.\n\nExiting...";
