@@ -2,6 +2,7 @@
 #include <fstream>
 #include <filesystem>
 #include <array>
+#include <atomic>
 #include <mutex>
 #ifdef _WIN32
 #include <io.h>
@@ -23,6 +24,7 @@
 #include "soh/Enhancements/randomizer/settings.h"
 #include "ResourceManagerHelpers.h"
 #include "soh/SohGui/SohGui.hpp"
+#include "soh/Notification/Notification.h"
 
 extern "C" {
 #include "z64.h"
@@ -33,6 +35,9 @@ extern "C" {
 
 extern "C" SaveContext gSaveContext;
 using namespace std::string_literals;
+
+// Set by the save pool thread; the notification list and the sound queue belong to the game thread.
+static std::atomic<bool> sSaveWriteFailed{ false };
 
 #if defined(__WIIU__) || defined(__SWITCH__)
 // std::filesystem::copy_file doesn't work properly with the Wii U's toolchain atm
@@ -193,6 +198,11 @@ SaveManager::SaveManager() {
 
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnExitGame>(
         [this](uint32_t fileNum) { ThreadPoolWait(); });
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>([]() {
+        if (sSaveWriteFailed.exchange(false)) {
+            Notification::Emit({ .message = "SAVE FAILED - check free storage. Previous save kept." });
+        }
+    });
 
     smThreadPool = std::make_shared<BS::thread_pool>(1);
 
@@ -1295,6 +1305,7 @@ void SaveManager::SaveFileThreaded(int fileNum, const SaveContext& saveContext, 
     }
 
     if (!WriteFileSafely(GetFileName(fileNum), saveBlock.dump(1))) {
+        sSaveWriteFailed.store(true);
         return;
     }
 
