@@ -289,6 +289,7 @@ std::string portArchivePath = "";
 static bool sohArchiveVersionMatch = false;
 
 #ifdef __IOS__
+#include <cctype>
 #include <cstring>
 #include <unistd.h>
 
@@ -341,6 +342,121 @@ static void IOS_RefreshBundledFile(const std::string& bundleFile, const std::str
     }
 }
 
+static bool IOS_IsArchivePath(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".o2r";
+}
+
+// Where iOS puts its own copy of a file shared to the app: Documents/Inbox, or
+// tmp/<bundle id>-Inbox on newer releases. A file anywhere else was opened in place and still
+// belongs to whoever shared it.
+static bool IOS_IsInInbox(const std::filesystem::path& path) {
+    const std::string folder = path.parent_path().filename().string();
+    return folder == "Inbox" || folder.ends_with("-Inbox");
+}
+
+// iOS de-duplicates names in an Inbox ("oot-1.o2r"). Undo that for the game archives only, so
+// the file shows up under the name the game looks for.
+static std::filesystem::path IOS_ArchiveImportPath(const std::filesystem::path& src) {
+    std::string stem = src.stem().string();
+    const size_t dash = stem.find_last_of('-');
+    if (dash != std::string::npos && dash + 1 < stem.size() &&
+        std::all_of(stem.begin() + dash + 1, stem.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        const std::string base = stem.substr(0, dash);
+        if (base == "oot" || base == "oot-mq") {
+            stem = base;
+        }
+    }
+    return std::filesystem::path(Ship::Context::GetAppDirectoryPath(appShortName)) / (stem + ".o2r");
+}
+
+// Moves a shared archive out of an Inbox into Documents, or copies one that was opened in place.
+// A copy goes through a temp file so the first-run watcher never sees a partial archive under
+// its real name.
+static bool IOS_ImportArchive(const std::filesystem::path& src) {
+    namespace fs = std::filesystem;
+    const fs::path dst = IOS_ArchiveImportPath(src);
+    std::error_code ec;
+    if (fs::equivalent(src, dst, ec)) {
+        return true;
+    }
+    const bool inInbox = IOS_IsInInbox(src);
+    if (inInbox) {
+        fs::rename(src, dst, ec);
+        if (!ec) {
+            return true;
+        }
+    }
+    const fs::path tmp = dst.string() + ".tmp";
+    fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec);
+    if (!ec) {
+        fs::rename(tmp, dst, ec);
+    }
+    if (ec) {
+        SPDLOG_ERROR("Could not import {}: {}", src.string(), ec.message());
+        std::error_code removeEc;
+        fs::remove(tmp, removeEc);
+        return false;
+    }
+    if (inInbox) {
+        fs::remove(src, ec);
+    }
+    return true;
+}
+
+// Saves are NOT swept - they go through the validated drop pipeline.
+static void IOS_SweepInboxes() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<fs::path> inboxes = { fs::path(Ship::Context::GetAppDirectoryPath(appShortName)) / "Inbox" };
+    const fs::path tmpDir = fs::temp_directory_path(ec);
+    if (!ec) {
+        for (fs::directory_iterator it(tmpDir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it->path().filename().string().ends_with("-Inbox")) {
+                inboxes.push_back(it->path());
+            }
+        }
+    }
+    std::vector<fs::path> archives;
+    for (const fs::path& inbox : inboxes) {
+        ec.clear();
+        for (fs::directory_iterator it(inbox, ec), end; !ec && it != end; it.increment(ec)) {
+            if (IOS_IsArchivePath(it->path())) {
+                archives.push_back(it->path());
+            }
+        }
+    }
+    for (const fs::path& archive : archives) {
+        IOS_ImportArchive(archive);
+    }
+}
+
+// "Open in Ship of Harkinian" or AirDrop while the app runs, including while the first-run popup
+// waits for oot.o2r: the file lands in the folder that popup watches.
+static bool IOS_HandleArchiveDrop(char* droppedPath) {
+    namespace fs = std::filesystem;
+    const fs::path src(droppedPath);
+    if (!IOS_IsArchivePath(src)) {
+        return false;
+    }
+    const fs::path dst = IOS_ArchiveImportPath(src);
+    std::error_code ec;
+    // An Inbox sweep (launch or foreground) may have moved it before this event was handled.
+    const bool alreadySwept = IOS_IsInInbox(src) && !fs::exists(src, ec) && fs::exists(dst, ec);
+    auto overlay = Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGameOverlay();
+    if (alreadySwept || IOS_ImportArchive(src)) {
+        overlay->TextDrawNotification(8.0f, true, "Copied %s into this app's folder",
+                                      dst.filename().string().c_str());
+    } else {
+        overlay->TextDrawNotification(12.0f, true,
+                                      "Could not read %s - copy it into this app's folder with the Files app",
+                                      src.filename().string().c_str());
+    }
+    return true;
+}
+
 // Make the app's Documents directory behave like a desktop install dir: it becomes the working
 // directory (the game reads and writes archives, config and saves with relative paths), and the
 // bundled port assets are refreshed into it so version checks always match the binary.
@@ -359,17 +475,10 @@ static void IOS_PrepareAppDirectory() {
     IOS_RefreshBundledFile(bundlePath + "/soh.o2r", dataPath + "/soh.o2r");
     IOS_RefreshBundledFile(bundlePath + "/gamecontrollerdb.txt", dataPath + "/gamecontrollerdb.txt");
 
-    // Files shared to this app ("Open in ...") land in Documents/Inbox; a game archive is
-    // useless there. Sweep any *.o2r into Documents proper so a cold-launched share of the
-    // game data just works. Saves are NOT swept - they go through the validated drop pipeline.
-    const std::filesystem::path inbox = std::filesystem::path(dataPath) / "Inbox";
-    if (std::filesystem::exists(inbox)) {
-        for (auto& entry : std::filesystem::directory_iterator(inbox, ec)) {
-            if (entry.path().extension() == ".o2r") {
-                std::filesystem::rename(entry.path(), std::filesystem::path(dataPath) / entry.path().filename(), ec);
-            }
-        }
-    }
+    // Files shared to this app ("Open in ...") land in an Inbox; a game archive is useless
+    // there. The open-URL event of a cold launch can arrive before SDL is up and be lost, so
+    // sweep any *.o2r into Documents proper here and a cold-launched share just works.
+    IOS_SweepInboxes();
 }
 #endif
 
@@ -429,6 +538,20 @@ OTRGlobals::OTRGlobals() {
     sohFast3dWindow =
         std::make_shared<Fast::Fast3dWindow>(std::vector<std::shared_ptr<Ship::GuiWindow>>({ sohInputEditorWindow }));
     context->InitWindow(sohFast3dWindow);
+#ifdef __IOS__
+    // Before RunExtract, so a game archive shared while the first-run popup waits is handled;
+    // the later InitFileDropMgr() in Initialize() is a no-op.
+    context->InitFileDropMgr();
+    context->GetFileDropMgr()->RegisterDropHandler(IOS_HandleArchiveDrop);
+    SDL_AddEventWatch(
+        [](void* userdata, SDL_Event* event) -> int {
+            if (event->type == SDL_APP_DIDENTERFOREGROUND) {
+                IOS_SweepInboxes();
+            }
+            return 0;
+        },
+        nullptr);
+#endif
 
     SohGui::SetupMenu();
 
