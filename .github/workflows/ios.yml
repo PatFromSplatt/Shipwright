@@ -13,8 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Mirrors upstream's generate-soh-otr job. GenerateSohOtr runs with --norom, so no game
-  # content is ever present in CI: soh.o2r contains only the port's own assets.
+  # Mirrors upstream's generate-soh-otr job. GenerateSohOtr only packs soh/assets/custom and
+  # the engine's shaders (no ROM), so no game content is ever present in CI: soh.o2r contains
+  # only the port's own assets.
   generate-soh-otr:
     runs-on: ubuntu-22.04
     steps:
@@ -24,7 +25,7 @@ jobs:
         submodules: true
     - name: Compute o2r cache key
       id: o2rkey
-      run: echo "key=otr-$(git rev-parse HEAD:soh/assets)-$(git rev-parse HEAD:OTRExporter)-$(git rev-parse HEAD:CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      run: echo "key=otr-$(git rev-parse HEAD:soh/assets)-$(git rev-parse HEAD:torch)-$(git rev-parse HEAD:libultraship)-$(git rev-parse HEAD:CMakeLists.txt)" >> "$GITHUB_OUTPUT"
     - name: Cache soh.o2r
       id: o2rcache
       uses: actions/cache@v4
@@ -36,36 +37,11 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y $(cat linux-build-deps/apt.txt)
-    - name: Create deps folder
-      if: steps.o2rcache.outputs.cache-hit != 'true'
-      run: mkdir -p deps
-    - name: Install latest SDL
-      if: steps.o2rcache.outputs.cache-hit != 'true'
-      run: |
-        if [ ! -d "deps/SDL2-2.30.3" ]; then
-          wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.tar.gz
-          tar -xzf SDL2-2.30.3.tar.gz -C deps
-        fi
-        cd deps/SDL2-2.30.3
-        ./configure --enable-hidapi-libusb
-        make -j 10
-        sudo make install
-        sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
-    - uses: ./.github/actions/install-sdl2-net
-      if: steps.o2rcache.outputs.cache-hit != 'true'
-    - name: Copy SDL libs to multiarch dir
-      if: steps.o2rcache.outputs.cache-hit != 'true'
-      run: sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
-    - name: Remove distro tinyxml2
-      if: steps.o2rcache.outputs.cache-hit != 'true'
-      run: sudo apt-get remove libtinyxml2-dev
-    - uses: ./.github/actions/install-tinyxml2
-      if: steps.o2rcache.outputs.cache-hit != 'true'
     - name: Generate soh.o2r
       if: steps.o2rcache.outputs.cache-hit != 'true'
       run: |
-        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release
-        cmake --build build-cmake --config Release --target GenerateSohOtr -j3
+        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release -DSOH_TOOLS_ONLY=ON
+        cmake --build build-cmake --config Release --target GenerateSohOtr -j4
     - name: Upload soh.o2r
       uses: actions/upload-artifact@v7
       with:
@@ -91,8 +67,7 @@ jobs:
         xcodebuild -version
         xcrun --sdk iphoneos --show-sdk-version
         test "$(xcrun --sdk iphoneos --show-sdk-version)" = "26.5"
-    - name: Install build tools
-      run: brew install ninja
+        ninja --version
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.23
       with:
