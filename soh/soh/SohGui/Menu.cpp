@@ -809,6 +809,9 @@ void Menu::DrawElement() {
             },
             nullptr);
     }
+#else
+    // Hold Quit's slot so Reset keeps its place instead of sitting flush against the tab strip.
+    ImGui::Dummy(buttonSize);
 #endif
     ImGui::PopStyleVar();
     ImGui::SameLine();
@@ -827,9 +830,22 @@ void Menu::DrawElement() {
 #endif
         ;
     if (UIWidgets::Button(ICON_FA_UNDO, options2)) {
+#if defined(__IOS__) || defined(__ANDROID__)
+        // A stray tap from the tab strip next door must not throw away progress.
+        SohGui::mModalWindow->RegisterPopup(
+            "Reset Game", "Reset to the title screen? Progress since your last save will be lost.", "Reset",
+            "Cancel",
+            []() {
+                std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
+                    Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
+                    ->Dispatch("reset");
+            },
+            nullptr);
+#else
         std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
             Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
             ->Dispatch("reset");
+#endif
     }
     ImGui::SameLine();
     UIWidgets::ButtonOptions options = {};
