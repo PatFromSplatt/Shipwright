@@ -657,12 +657,18 @@ OTRVersion ReadPortVersionFromOTR(std::string otrPath);
 
 static const char* const kIOSNeedsGameDataTitle = "Ship of Harkinian needs game data";
 static const char* const kIOSCopyingGameDataTitle = "Copying game data";
+static const char* const kIOSDamagedGameDataTitle = "Game data could not be read";
 
 // A game archive copied in from Windows (Apple Devices) or pasted through the Files app is
 // created first and filled in place, and the zip's central directory is written last. It may
 // only be loaded once its size and modification time have settled AND it opens with both
 // version entries readable.
 static constexpr auto kIOSArchiveSettleTime = std::chrono::milliseconds(1500);
+// A copy can pause for a moment, so an archive that fails the check is only called damaged once
+// it has stayed unchanged this long. Until then it is still being copied.
+static constexpr auto kIOSArchiveGiveUpTime = std::chrono::seconds(10);
+
+enum class IOSArchiveState { Copying, Damaged, Ready };
 
 struct IOSArchiveWatch {
     uintmax_t size = 0;
@@ -693,71 +699,93 @@ static OTRVersion IOS_ReadCompleteArchiveVersion(const std::string& path) {
 }
 
 // Polled every frame while waiting; the archive itself is only opened once per settled
-// size/mtime pair.
-static bool IOS_GameArchiveReady(const std::string& path, OTRVersion* version) {
+// size/mtime pair. A 0-byte file is never opened: it reads as damaged once it has settled.
+static IOSArchiveState IOS_GetGameArchiveState(const std::string& path, OTRVersion* version) {
     static std::unordered_map<std::string, IOSArchiveWatch> sWatches;
     std::error_code ec;
     const uintmax_t size = std::filesystem::file_size(path, ec);
-    if (ec || size == 0) {
+    if (ec) {
         sWatches.erase(path);
-        return false;
+        return IOSArchiveState::Copying;
     }
     const std::filesystem::file_time_type mtime = std::filesystem::last_write_time(path, ec);
     if (ec) {
-        return false;
+        return IOSArchiveState::Copying;
     }
     const auto now = std::chrono::steady_clock::now();
     auto it = sWatches.find(path);
     if (it == sWatches.end() || it->second.size != size || it->second.mtime != mtime) {
         // On a normal launch the file was last written long before it was first seen here;
-        // don't make that wait out the settle time.
-        const bool settledBeforeFirstSeen =
-            it == sWatches.end() &&
-            std::filesystem::file_time_type::clock::now() - mtime >= kIOSArchiveSettleTime;
+        // don't make that wait out the settle or give-up time.
+        const bool firstSeen = it == sWatches.end();
+        const auto age = std::filesystem::file_time_type::clock::now() - mtime;
         IOSArchiveWatch watch;
         watch.size = size;
         watch.mtime = mtime;
-        watch.changedAt = settledBeforeFirstSeen ? now - kIOSArchiveSettleTime : now;
+        if (firstSeen && age >= kIOSArchiveGiveUpTime) {
+            watch.changedAt = now - kIOSArchiveGiveUpTime;
+        } else if (firstSeen && age >= kIOSArchiveSettleTime) {
+            watch.changedAt = now - kIOSArchiveSettleTime;
+        } else {
+            watch.changedAt = now;
+        }
         it = sWatches.insert_or_assign(path, watch).first;
     }
     IOSArchiveWatch& watch = it->second;
-    if (now - watch.changedAt < kIOSArchiveSettleTime) {
-        return false;
+    const auto unchangedFor = now - watch.changedAt;
+    if (unchangedFor < kIOSArchiveSettleTime) {
+        return IOSArchiveState::Copying;
     }
     if (!watch.checked) {
         watch.checked = true;
-        watch.version = IOS_ReadCompleteArchiveVersion(path);
+        if (size != 0) {
+            watch.version = IOS_ReadCompleteArchiveVersion(path);
+        }
     }
     if (!IOS_VersionKnown(watch.version)) {
-        return false;
+        return unchangedFor < kIOSArchiveGiveUpTime ? IOSArchiveState::Copying : IOSArchiveState::Damaged;
     }
     if (version != nullptr) {
         *version = watch.version;
     }
-    return true;
+    return IOSArchiveState::Ready;
 }
 
-// True when every game archive that exists is complete. Otherwise *pending names the first one
-// that is not. Initialize() adds every archive that exists, so one still copying must hold the
-// boot even when the other is ready.
-static bool IOS_GameDataComplete(std::string* pending, bool* outdated) {
+// Copying while any game archive that exists is still changing: Initialize() adds every archive
+// that exists, so one still copying must hold the boot even when the other is ready. Otherwise
+// Damaged when one that exists cannot be read, else Ready. *problem names the archive that is
+// copying or damaged, and *anyReady says whether another archive is ready to play without it.
+static IOSArchiveState IOS_GetGameDataState(std::string* problem, bool* outdated, bool* anyReady) {
+    IOSArchiveState state = IOSArchiveState::Ready;
     for (const char* name : { "oot.o2r", "oot-mq.o2r" }) {
         const std::string path = Ship::Context::LocateFileAcrossAppDirs(name, appShortName);
         if (!std::filesystem::exists(path)) {
             continue;
         }
         OTRVersion version = {};
-        if (!IOS_GameArchiveReady(path, &version)) {
-            if (pending != nullptr) {
-                *pending = name;
-            }
-            return false;
-        }
-        if (outdated != nullptr && VerifyArchiveVersion(version)) {
-            *outdated = true;
+        switch (IOS_GetGameArchiveState(path, &version)) {
+            case IOSArchiveState::Copying:
+                if (problem != nullptr) {
+                    *problem = name;
+                }
+                return IOSArchiveState::Copying;
+            case IOSArchiveState::Damaged:
+                if (problem != nullptr && state != IOSArchiveState::Damaged) {
+                    *problem = name;
+                }
+                state = IOSArchiveState::Damaged;
+                break;
+            case IOSArchiveState::Ready:
+                if (anyReady != nullptr) {
+                    *anyReady = true;
+                }
+                if (outdated != nullptr && VerifyArchiveVersion(version)) {
+                    *outdated = true;
+                }
+                break;
         }
     }
-    return true;
+    return state;
 }
 
 static void IOS_RegisterOutdatedGameDataPopup() {
@@ -799,6 +827,13 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
     std::string installPath = std::filesystem::absolute(Ship::Context::GetAppBundlePath()).string();
     std::string dataPath = std::filesystem::absolute(Ship::Context::GetAppDirectoryPath(appShortName)).string();
     std::string file;
+#ifdef __IOS__
+    // What the damaged-archive popup currently names and offers, so the watcher can replace it
+    // when that changes.
+    std::string iosDamagedArchiveShown;
+    bool iosDamagedOfferedSkip = false;
+    bool iosPlayWithoutDamaged = false;
+#endif
 
 #if defined(__SWITCH__)
     SohGui::RegisterPopup("Outdated ROM Archives",
@@ -820,8 +855,9 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
     // to — so neither the fatal assets check nor the o2r deletion may run here. Deleting an
     // outdated oot.o2r would destroy the player's hand-copied file with no way to regenerate
     // it on the phone; tell them what to do on their PC instead and leave the file alone.
-    // An archive still being copied in has no readable portVersion yet and reads as 0.0.0. That
-    // is not "outdated": ES_VERIFY waits for the copy to finish and checks the version then.
+    // An archive still being copied in, or a damaged one, has no readable portVersion and reads
+    // as 0.0.0. That is not "outdated": ES_VERIFY waits for the copy to finish and checks the
+    // version then, or reports the file as damaged.
     shouldRegen = (VerifyArchiveVersion(vanillaVersion) && IOS_VersionKnown(vanillaVersion)) ||
                   (VerifyArchiveVersion(mqVersion) && IOS_VersionKnown(mqVersion));
     if (shouldRegen) {
@@ -1131,19 +1167,39 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                 }
 #ifdef __IOS__
                 {
-                    std::string pendingArchive;
+                    std::string problemArchive;
                     bool outdated = false;
-                    if (!IOS_GameDataComplete(&pendingArchive, &outdated)) {
+                    bool anyReady = false;
+                    const IOSArchiveState dataState = IOS_GetGameDataState(&problemArchive, &outdated, &anyReady);
+                    if (dataState == IOSArchiveState::Copying) {
                         SohGui::RegisterPopup(kIOSCopyingGameDataTitle,
-                                              pendingArchive +
+                                              problemArchive +
                                                   " is still being copied into this app's folder.\n\nKeep this "
                                                   "app open - the game will start by itself once the copy has "
                                                   "finished.\n\nIf nothing happens, copy " +
-                                                  pendingArchive + " again.",
+                                                  problemArchive + " again.",
                                               "Open Files", "", [&]() {
                                                   SDL_OpenURL(("shareddocuments://" + dataPath).c_str());
                                               });
                         goto render; // the render section dismisses this once the copy is complete
+                    }
+                    if (dataState == IOSArchiveState::Damaged && !(anyReady && iosPlayWithoutDamaged)) {
+                        // Initialize() skips an archive that does not open and a 0-byte one adds no
+                        // files, so the archive that is ready can be played on its own.
+                        iosDamagedArchiveShown = problemArchive;
+                        iosDamagedOfferedSkip = anyReady;
+                        SohGui::RegisterPopup(
+                            kIOSDamagedGameDataTitle,
+                            problemArchive +
+                                " is in this app's folder but could not be read. It is damaged or was only "
+                                "partly copied.\n\nDelete it (Open Files below), then copy " +
+                                problemArchive +
+                                " into this app's folder again.\nKeep this app open - the game will start by "
+                                "itself once the copy has finished.",
+                            "Open Files", anyReady ? "Play without it" : "",
+                            [&]() { SDL_OpenURL(("shareddocuments://" + dataPath).c_str()); },
+                            [&]() { iosPlayWithoutDamaged = true; });
+                        goto render; // the render section replaces this once the file changes
                     }
                     if (outdated) {
                         IOS_RegisterOutdatedGameDataPopup();
@@ -1180,14 +1236,22 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
 #ifdef __IOS__
         // The moment oot.o2r lands in Documents (pasted via the Files app while the waiting
         // popup is up), dismiss it — the loop re-runs ES_VERIFY, which shows the copying popup
-        // until the file is complete, and that one is dismissed here too once it is.
+        // until the file is complete, and that one is dismissed here too once it is. The damaged
+        // popup goes once its file is deleted or changes, or when what it should say changes.
         if (extractStep == ES_VERIFY) {
             if (std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName)) ||
                 std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot-mq.o2r", appShortName))) {
                 SohGui::DismissPopup(kIOSNeedsGameDataTitle);
             }
-            if (IOS_GameDataComplete(nullptr, nullptr)) {
+            std::string problemArchive;
+            bool anyReady = false;
+            const IOSArchiveState dataState = IOS_GetGameDataState(&problemArchive, nullptr, &anyReady);
+            if (dataState != IOSArchiveState::Copying) {
                 SohGui::DismissPopup(kIOSCopyingGameDataTitle);
+            }
+            if (dataState != IOSArchiveState::Damaged || problemArchive != iosDamagedArchiveShown ||
+                anyReady != iosDamagedOfferedSkip) {
+                SohGui::DismissPopup(kIOSDamagedGameDataTitle);
             }
         }
 #endif

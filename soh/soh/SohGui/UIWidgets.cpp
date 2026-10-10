@@ -79,12 +79,15 @@ bool TooltipRequested(ImGuiHoveredFlags flags) {
     // Touch has no hover. SDL synthesises the mouse from the finger, so "hovered" is only
     // meaningful while a finger is down — and the parked cursor after a lift must not keep a
     // tooltip alive. A stationary hold reads as "what does this do?"; movement past the slop
-    // is a drag (scroll or slider) and must stay tooltip-free.
+    // is a drag (scroll or slider) and must stay tooltip-free. The hold is timed from the press,
+    // not by HoveredIdTimer: the parked cursor keeps the last item hovered between taps, so that
+    // timer is already past the threshold when the same item is tapped again.
     if (!ImGui::IsItemHovered(flags) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         return false;
     }
     const ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.0f);
-    return GImGui->HoveredIdTimer > 0.45f && std::fabs(drag.x) < 8.0f && std::fabs(drag.y) < 8.0f;
+    return ImGui::GetIO().MouseDownDuration[ImGuiMouseButton_Left] > 0.45f && std::fabs(drag.x) < 8.0f &&
+           std::fabs(drag.y) < 8.0f;
 #else
     return ImGui::IsItemHovered(flags);
 #endif
