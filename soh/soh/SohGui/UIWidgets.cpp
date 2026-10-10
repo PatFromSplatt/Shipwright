@@ -17,6 +17,12 @@ namespace UIWidgets {
 // The +/- steppers are the only precise adjustment a thumb has (Ctrl+Click to type does not
 // exist on glass), so widgets may not opt out of them on touch builds.
 static constexpr bool kForceAdjustmentButtons = true;
+
+// A slider jumps to the finger on press, before a long-press can turn into a tooltip. The value
+// from before the press is kept here so the tooltip can put it back.
+static ImGuiID sTouchSliderId = 0;
+static int32_t sTouchSliderIntBefore = 0;
+static float sTouchSliderFloatBefore = 0.0f;
 #else
 static constexpr bool kForceAdjustmentButtons = false;
 #endif
@@ -86,6 +92,13 @@ bool TooltipRequested(ImGuiHoveredFlags flags) {
 
 void ShowTooltip(const char* text) {
 #if defined(__IOS__) || defined(__ANDROID__)
+    // A long-press is a question, not a command: drop the press so lifting the finger does not
+    // click, toggle or open the item. Only the item (or group) under the finger gets here, and it
+    // stays hovered, so the tooltip stays up.
+    ImGuiContext& g = *GImGui;
+    if (g.ActiveId != 0 && g.ActiveIdSource == ImGuiInputSource_Mouse) {
+        ImGui::ClearActiveID();
+    }
     // Above the finger, not under it.
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y - 20.0f), ImGuiCond_Always,
                             ImVec2(0.5f, 1.0f));
@@ -608,6 +621,9 @@ bool SliderInt(const char* label, int32_t* value, const IntSliderOptions& option
     } else {
         ImGui::SetNextItemWidth(width);
     }
+#if defined(__IOS__) || defined(__ANDROID__)
+    const int32_t valueBeforeSlider = *value;
+#endif
     if (ImGui::SliderScalar(invisibleLabel, ImGuiDataType_S32, value, &options.min, &options.max, options.format,
                             options.flags)) {
         if (options.clamp) {
@@ -619,6 +635,13 @@ bool SliderInt(const char* label, int32_t* value, const IntSliderOptions& option
         }
         dirty = true;
     }
+#if defined(__IOS__) || defined(__ANDROID__)
+    const ImGuiID sliderId = ImGui::GetItemID();
+    if (ImGui::IsItemActivated()) {
+        sTouchSliderId = sliderId;
+        sTouchSliderIntBefore = valueBeforeSlider;
+    }
+#endif
     if (options.showButtons || kForceAdjustmentButtons) {
         ImGui::SameLine(0, 3.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -649,6 +672,12 @@ bool SliderInt(const char* label, int32_t* value, const IntSliderOptions& option
         !options.disabledTooltip.empty()) {
         ShowTooltip(WrappedText(options.disabledTooltip).c_str());
     } else if (TooltipRequested(ImGuiHoveredFlags_AllowWhenDisabled) && !options.tooltip.empty()) {
+#if defined(__IOS__) || defined(__ANDROID__)
+        if (sliderId == sTouchSliderId && ImGui::GetActiveID() == sliderId) {
+            *value = sTouchSliderIntBefore;
+            dirty = true;
+        }
+#endif
         ShowTooltip(WrappedText(options.tooltip).c_str());
     }
     ImGui::PopID();
@@ -746,6 +775,9 @@ bool SliderFloat(const char* label, float* value, const FloatSliderOptions& opti
     } else {
         ImGui::SetNextItemWidth(width);
     }
+#if defined(__IOS__) || defined(__ANDROID__)
+    const float valueBeforeSlider = *value;
+#endif
     if (ImGui::SliderScalar(invisibleLabel, ImGuiDataType_Float, &valueToDisplay, &minToDisplay, &maxToDisplay,
                             options.format, options.flags)) {
         *value = options.isPercentage ? valueToDisplay / 100.0f : valueToDisplay;
@@ -754,6 +786,13 @@ bool SliderFloat(const char* label, float* value, const FloatSliderOptions& opti
         }
         dirty = true;
     }
+#if defined(__IOS__) || defined(__ANDROID__)
+    const ImGuiID sliderId = ImGui::GetItemID();
+    if (ImGui::IsItemActivated()) {
+        sTouchSliderId = sliderId;
+        sTouchSliderFloatBefore = valueBeforeSlider;
+    }
+#endif
     if (options.showButtons || kForceAdjustmentButtons) {
         ImGui::SameLine(0, 3.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -782,6 +821,12 @@ bool SliderFloat(const char* label, float* value, const FloatSliderOptions& opti
         !options.disabledTooltip.empty()) {
         ShowTooltip(WrappedText(options.disabledTooltip).c_str());
     } else if (TooltipRequested(ImGuiHoveredFlags_AllowWhenDisabled) && !options.tooltip.empty()) {
+#if defined(__IOS__) || defined(__ANDROID__)
+        if (sliderId == sTouchSliderId && ImGui::GetActiveID() == sliderId) {
+            *value = sTouchSliderFloatBefore;
+            dirty = true;
+        }
+#endif
         ShowTooltip(WrappedText(options.tooltip).c_str());
     }
     ImGui::PopID();
