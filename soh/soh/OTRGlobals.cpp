@@ -764,8 +764,8 @@ static void IOS_RegisterOutdatedGameDataPopup() {
     SohGui::RegisterPopup("Game data is outdated",
                           "Your oot.o2r was made with an incompatible version of Ship of Harkinian.\n\n"
                           "On your PC: run the matching SoH release to regenerate oot.o2r, then replace the "
-                          "copy in this app's folder (Files app > On My iPhone > SoH, or the Apple Devices "
-                          "app on Windows).\n\nYour current file has NOT been deleted.",
+                          "copy in this app's folder (Files app > On My iPhone > Ship of Harkinian, or the "
+                          "Apple Devices app on Windows).\n\nYour current file has NOT been deleted.",
                           "OK", "", []() { exit(0); });
 }
 #endif
@@ -1116,9 +1116,9 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                                           "oot.o2r was not found. Generate it with the DESKTOP version of Ship of "
                                           "Harkinian from your own Ocarina of Time ROM.\n\nThen, WITHOUT closing "
                                           "this app, copy oot.o2r into this app's folder:\n\nOn this phone: Open "
-                                          "Files below, then paste into On My iPhone > SoH\nFrom Windows: Apple "
-                                          "Devices app > iPhone > Files > SoH\n\nThe game will start by itself "
-                                          "once the file is there.",
+                                          "Files below, then paste into On My iPhone > Ship of Harkinian\nFrom "
+                                          "Windows: Apple Devices app > iPhone > Files > Ship of Harkinian\n\nThe "
+                                          "game will start by itself once the file is there.",
                                           "Open Files", "", [&]() {
                                               SDL_OpenURL(("shareddocuments://" + dataPath).c_str());
                                           });

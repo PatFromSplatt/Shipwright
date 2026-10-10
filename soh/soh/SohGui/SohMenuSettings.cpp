@@ -658,9 +658,9 @@ void SohMenu::AddMenuSettings() {
                 "Hold a finger on any setting for half a second to read what it does - including greyed-out ones, "
                 "which explain why they are disabled.");
         section("Your files",
-                "oot.o2r, saves and mods live in this app's folder: Files app > On My iPhone > SoH (or Settings > "
-                "General > Open App Files Folder). Everything there survives app updates and re-installs - "
-                "including the 7-day re-sideload.");
+                "oot.o2r, saves and mods live in this app's folder: Files app > On My iPhone > Ship of Harkinian "
+                "(or Settings > General > Open App Files Folder). Everything there survives app updates and "
+                "re-installs - including the 7-day re-sideload.");
     });
 #endif
 
