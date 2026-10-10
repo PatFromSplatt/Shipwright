@@ -529,6 +529,124 @@ static bool RemoveArchiveAcrossAppDirs(const std::string& fileName) {
     return !std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs(fileName, appShortName));
 }
 
+#ifdef __IOS__
+OTRVersion ReadPortVersionFromOTR(std::string otrPath);
+
+static const char* const kIOSNeedsGameDataTitle = "Ship of Harkinian needs game data";
+static const char* const kIOSCopyingGameDataTitle = "Copying game data";
+
+// A game archive copied in from Windows (Apple Devices) or pasted through the Files app is
+// created first and filled in place, and the zip's central directory is written last. It may
+// only be loaded once its size and modification time have settled AND it opens with both
+// version entries readable.
+static constexpr auto kIOSArchiveSettleTime = std::chrono::milliseconds(1500);
+
+struct IOSArchiveWatch {
+    uintmax_t size = 0;
+    std::filesystem::file_time_type mtime;
+    std::chrono::steady_clock::time_point changedAt;
+    bool checked = false;
+    OTRVersion version = {};
+};
+
+static bool IOS_VersionKnown(const OTRVersion& version) {
+    return version.major != 0 || version.minor != 0 || version.patch != 0;
+}
+
+// {0, 0, 0} unless the archive opens and both "version" and "portVersion" load. Open() alone
+// proves nothing: O2rArchive opens with ZIP_CREATE, which accepts an empty file.
+static OTRVersion IOS_ReadCompleteArchiveVersion(const std::string& path) {
+    {
+        auto archive = std::make_shared<Ship::O2rArchive>(path);
+        if (!archive->Open()) {
+            return {};
+        }
+        auto gameVersion = archive->LoadFile("version");
+        if (gameVersion == nullptr || !gameVersion->IsLoaded) {
+            return {};
+        }
+    }
+    return ReadPortVersionFromOTR(path);
+}
+
+// Polled every frame while waiting; the archive itself is only opened once per settled
+// size/mtime pair.
+static bool IOS_GameArchiveReady(const std::string& path, OTRVersion* version) {
+    static std::unordered_map<std::string, IOSArchiveWatch> sWatches;
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0) {
+        sWatches.erase(path);
+        return false;
+    }
+    const std::filesystem::file_time_type mtime = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    auto it = sWatches.find(path);
+    if (it == sWatches.end() || it->second.size != size || it->second.mtime != mtime) {
+        // On a normal launch the file was last written long before it was first seen here;
+        // don't make that wait out the settle time.
+        const bool settledBeforeFirstSeen =
+            it == sWatches.end() &&
+            std::filesystem::file_time_type::clock::now() - mtime >= kIOSArchiveSettleTime;
+        IOSArchiveWatch watch;
+        watch.size = size;
+        watch.mtime = mtime;
+        watch.changedAt = settledBeforeFirstSeen ? now - kIOSArchiveSettleTime : now;
+        it = sWatches.insert_or_assign(path, watch).first;
+    }
+    IOSArchiveWatch& watch = it->second;
+    if (now - watch.changedAt < kIOSArchiveSettleTime) {
+        return false;
+    }
+    if (!watch.checked) {
+        watch.checked = true;
+        watch.version = IOS_ReadCompleteArchiveVersion(path);
+    }
+    if (!IOS_VersionKnown(watch.version)) {
+        return false;
+    }
+    if (version != nullptr) {
+        *version = watch.version;
+    }
+    return true;
+}
+
+// True when every game archive that exists is complete. Otherwise *pending names the first one
+// that is not. Initialize() adds every archive that exists, so one still copying must hold the
+// boot even when the other is ready.
+static bool IOS_GameDataComplete(std::string* pending, bool* outdated) {
+    for (const char* name : { "oot.o2r", "oot-mq.o2r" }) {
+        const std::string path = Ship::Context::LocateFileAcrossAppDirs(name, appShortName);
+        if (!std::filesystem::exists(path)) {
+            continue;
+        }
+        OTRVersion version = {};
+        if (!IOS_GameArchiveReady(path, &version)) {
+            if (pending != nullptr) {
+                *pending = name;
+            }
+            return false;
+        }
+        if (outdated != nullptr && VerifyArchiveVersion(version)) {
+            *outdated = true;
+        }
+    }
+    return true;
+}
+
+static void IOS_RegisterOutdatedGameDataPopup() {
+    SohGui::RegisterPopup("Game data is outdated",
+                          "Your oot.o2r was made with an incompatible version of Ship of Harkinian.\n\n"
+                          "On your PC: run the matching SoH release to regenerate oot.o2r, then replace the "
+                          "copy in this app's folder (Files app > On My iPhone > SoH, or the Apple Devices "
+                          "app on Windows).\n\nYour current file has NOT been deleted.",
+                          "OK", "", []() { exit(0); });
+}
+#endif
+
 void OTRGlobals::RunExtract(int argc, char* argv[]) {
     bool extractDone = false;
     ExtractSteps extractStep = ES_PORT_ARCHIVE;
@@ -579,13 +697,12 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
     // to — so neither the fatal assets check nor the o2r deletion may run here. Deleting an
     // outdated oot.o2r would destroy the player's hand-copied file with no way to regenerate
     // it on the phone; tell them what to do on their PC instead and leave the file alone.
+    // An archive still being copied in has no readable portVersion yet and reads as 0.0.0. That
+    // is not "outdated": ES_VERIFY waits for the copy to finish and checks the version then.
+    shouldRegen = (VerifyArchiveVersion(vanillaVersion) && IOS_VersionKnown(vanillaVersion)) ||
+                  (VerifyArchiveVersion(mqVersion) && IOS_VersionKnown(mqVersion));
     if (shouldRegen) {
-        SohGui::RegisterPopup("Game data is outdated",
-                              "Your oot.o2r was made with an incompatible version of Ship of Harkinian.\n\n"
-                              "On your PC: run the matching SoH release to regenerate oot.o2r, then replace the "
-                              "copy in this app's folder (Files app > On My iPhone > SoH, or the Apple Devices "
-                              "app on Windows).\n\nYour current file has NOT been deleted.",
-                              "OK", "", [&]() { exit(0); });
+        IOS_RegisterOutdatedGameDataPopup();
     }
 #else
     if (!std::filesystem::exists(installPath + "/assets")) {
@@ -871,8 +988,8 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                     // WAIT, never exit: exiting made a fresh install look like a crash and
                     // forced a relaunch dance. The popup offers an Open Files jump straight
                     // into this app's folder; the render section below watches for the file
-                    // and auto-dismisses the moment it lands, which loops back here and boots.
-                    SohGui::RegisterPopup("Ship of Harkinian needs game data",
+                    // and auto-dismisses the moment it lands, which loops back here.
+                    SohGui::RegisterPopup(kIOSNeedsGameDataTitle,
                                           "oot.o2r was not found. Generate it with the DESKTOP version of Ship of "
                                           "Harkinian from your own Ocarina of Time ROM.\n\nThen, WITHOUT closing "
                                           "this app, copy oot.o2r into this app's folder:\n\nOn this phone: Open "
@@ -889,6 +1006,28 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                                           "", [&]() { exit(0); });
 #endif
                 }
+#ifdef __IOS__
+                {
+                    std::string pendingArchive;
+                    bool outdated = false;
+                    if (!IOS_GameDataComplete(&pendingArchive, &outdated)) {
+                        SohGui::RegisterPopup(kIOSCopyingGameDataTitle,
+                                              pendingArchive +
+                                                  " is still being copied into this app's folder.\n\nKeep this "
+                                                  "app open - the game will start by itself once the copy has "
+                                                  "finished.\n\nIf nothing happens, copy " +
+                                                  pendingArchive + " again.",
+                                              "Open Files", "", [&]() {
+                                                  SDL_OpenURL(("shareddocuments://" + dataPath).c_str());
+                                              });
+                        goto render; // the render section dismisses this once the copy is complete
+                    }
+                    if (outdated) {
+                        IOS_RegisterOutdatedGameDataPopup();
+                        goto render;
+                    }
+                }
+#endif
                 extractDone = true;
                 continue;
             }
@@ -917,11 +1056,16 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
         sohFast3dWindow->RunGuiOnly();
 #ifdef __IOS__
         // The moment oot.o2r lands in Documents (pasted via the Files app while the waiting
-        // popup is up), dismiss it — the loop re-runs ES_VERIFY, which now passes and boots.
-        if (extractStep == ES_VERIFY &&
-            (std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName)) ||
-             std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot-mq.o2r", appShortName)))) {
-            SohGui::DismissPopup("Ship of Harkinian needs game data");
+        // popup is up), dismiss it — the loop re-runs ES_VERIFY, which shows the copying popup
+        // until the file is complete, and that one is dismissed here too once it is.
+        if (extractStep == ES_VERIFY) {
+            if (std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName)) ||
+                std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot-mq.o2r", appShortName))) {
+                SohGui::DismissPopup(kIOSNeedsGameDataTitle);
+            }
+            if (IOS_GameDataComplete(nullptr, nullptr)) {
+                SohGui::DismissPopup(kIOSCopyingGameDataTitle);
+            }
         }
 #endif
         if (extractionTask.has_value()) {
