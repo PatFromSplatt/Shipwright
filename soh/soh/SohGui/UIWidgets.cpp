@@ -10,6 +10,14 @@
 
 namespace UIWidgets {
 
+#if defined(__IOS__) || defined(__ANDROID__)
+// The +/- steppers are the only precise adjustment a thumb has (Ctrl+Click to type does not
+// exist on glass), so widgets may not opt out of them on touch builds.
+static constexpr bool kForceAdjustmentButtons = true;
+#else
+static constexpr bool kForceAdjustmentButtons = false;
+#endif
+
 // Automatically adds newlines to break up text longer than a specified number of characters
 // Manually included newlines will still be respected and reset the line length
 // If line is midword when it hits the limit, text should break at the last encountered space
@@ -574,7 +582,7 @@ bool SliderInt(const char* label, int32_t* value, const IntSliderOptions& option
             ImGui::Text(visibleLabel, *value);
         }
     }
-    if (options.showButtons) {
+    if (options.showButtons || kForceAdjustmentButtons) {
         if (Button("-", ButtonOptions{ .color = options.color }.Size(Sizes::Inline)) && *value > options.min) {
             *value -= options.step;
             if (options.clamp) {
@@ -600,7 +608,7 @@ bool SliderInt(const char* label, int32_t* value, const IntSliderOptions& option
         }
         dirty = true;
     }
-    if (options.showButtons) {
+    if (options.showButtons || kForceAdjustmentButtons) {
         ImGui::SameLine(0, 3.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (Button("+", ButtonOptions{ .color = options.color }.Size(Sizes::Inline)) && *value < options.max) {
@@ -714,7 +722,7 @@ bool SliderFloat(const char* label, float* value, const FloatSliderOptions& opti
             ImGui::Text(visibleLabel, *value);
         }
     }
-    if (options.showButtons) {
+    if (options.showButtons || kForceAdjustmentButtons) {
         if (Button("-", ButtonOptions{ .color = options.color }.Size(Sizes::Inline)) && *value > options.min) {
             *value -= options.step;
             if (options.clamp) {
@@ -735,7 +743,7 @@ bool SliderFloat(const char* label, float* value, const FloatSliderOptions& opti
         }
         dirty = true;
     }
-    if (options.showButtons) {
+    if (options.showButtons || kForceAdjustmentButtons) {
         ImGui::SameLine(0, 3.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (Button("+", ButtonOptions{ .color = options.color }.Size(Sizes::Inline)) && *value < options.max) {
