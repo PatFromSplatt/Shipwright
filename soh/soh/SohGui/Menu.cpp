@@ -851,7 +851,7 @@ void Menu::DrawElement() {
     UIWidgets::ButtonOptions options = {};
     options.size = UIWidgets::Sizes::Inline;
 #if defined(__IOS__) || defined(__ANDROID__)
-    options.tooltip = "Close Menu (or tap the gear button)";
+    options.tooltip = "Close Menu (or tap the 'menu' pill)";
 #else
     options.tooltip = "Close Menu (Esc)";
 #endif

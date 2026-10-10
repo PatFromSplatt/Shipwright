@@ -286,7 +286,7 @@ void SetupGuiElements() {
     const int32_t menuHints = CVarGetInteger("gPort.MenuHintShown", 0);
     if (menuHints < 3) {
         gui->GetGameOverlay()->TextDrawNotification(12.0f, true,
-                                                    "Tap the gear pill (top centre) for the menu - Settings > Help "
+                                                    "Tap the 'menu' pill (top centre) for settings - Settings > Help "
                                                     "explains the touch controls");
         CVarSetInteger("gPort.MenuHintShown", menuHints + 1);
     }

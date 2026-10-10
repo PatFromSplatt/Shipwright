@@ -647,7 +647,7 @@ void SohMenu::AddMenuSettings() {
         section("The four small pills (top centre)",
                 "start: pause menu.   menu: opens THIS settings menu.   song: switches the buttons into an ocarina "
                 "piano - five keys, low D to high C-up - tap song again to switch back.   hide: hides the controls; "
-                "a faint dot stays where the hide pill was, tap it to bring everything back.");
+                "a faint dot appears in the bottom-right corner - tap it to bring everything back.");
         section("Gyro aiming",
                 "Settings > Touch Controls > Gyro Aiming. Works in first person only: C-up look, bow, slingshot, "
                 "hookshot. Tune it with Gyro Sensitivity in the same menu.");
